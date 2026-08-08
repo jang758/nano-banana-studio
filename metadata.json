@@ -1,0 +1,5 @@
+{
+  "name": "Nano Banana Studio",
+  "description": "Advanced image analysis and generation tool using Google's Nano Banana (Gemini 2.5 Flash Image) and Nano Banana Pro (Gemini 3 Pro Image) models. Features deep prompt reverse-engineering, detailed body/face analysis, and high-fidelity image reproduction.",
+  "requestFramePermissions": []
+}
