@@ -97,6 +97,8 @@ export function formatAnalysisReport(report: AnalysisReport): string {
     `- 생성 시각: ${new Date(report.createdAt).toISOString()}`,
     `- 결과: ${report.outcome}`,
     `- 분석 방식: ${report.pipeline}`,
+    `- API 호출 방식: ${report.apiMethod || '기록 없음'}`,
+    `- Safety 설정: ${report.safetyMode || '기록 없음'}`,
     `- 선택 모델: ${report.requestedModel}`,
     `- API 응답 모델: ${report.resolvedModels.join(', ') || '확인 불가'}`,
     `- Agentic Vision 선택: ${report.agenticVisionRequested ? '예' : '아니오'}`,
@@ -123,9 +125,13 @@ export function formatAnalysisReport(report: AnalysisReport): string {
       `### ${index + 1}. ${stage.name}`,
       `- 모델: ${stage.resolvedModel || stage.requestedModel}`,
       `- 상태: ${stage.status}`,
+      `- API 시도 횟수: ${stage.attemptCount ?? 1}`,
+      `- 종료 사유: ${stage.finishReason || '없음'}`,
+      `- 프롬프트 차단 사유: ${stage.promptBlockReason || '없음'}`,
       `- 시간: ${(stage.durationMs / 1000).toFixed(2)}초`,
       `- 토큰: 입력 ${stage.usage.inputTokens}, 출력 ${stage.usage.outputTokens}, 생각 ${stage.usage.thoughtTokens}, 도구 ${stage.usage.toolUseTokens}`,
       `- Agentic Vision: ${stage.agenticVisionStatus}`,
+      ...(stage.retryReasons?.length ? stage.retryReasons.map((reason, retryIndex) => `- 자동 재시도 ${retryIndex + 1}: ${reason}`) : []),
       '',
     ]),
   ];
@@ -162,7 +168,11 @@ export function formatAnalysisReport(report: AnalysisReport): string {
       '',
       `- 단계: ${report.failure.stage}`,
       `- 분류: ${report.failure.category}`,
+      `- API 시도 횟수: ${report.failure.attemptCount ?? 0}`,
       `- 이유: ${report.failure.reason}`,
+      ...(report.failure.retryReasons?.length
+        ? report.failure.retryReasons.map((reason, retryIndex) => `- 자동 재시도 ${retryIndex + 1}: ${reason}`)
+        : []),
       '',
     );
   }

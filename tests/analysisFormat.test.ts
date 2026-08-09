@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { analysisResultSchema } from '../services/geminiService';
 import { ANALYSIS_JSON_SCHEMA, SAFETY_SETTINGS } from '../services/geminiService';
 import { DEFAULT_SETTINGS } from '../constants';
@@ -38,8 +39,21 @@ describe('analysis contract', () => {
     ]);
   });
 
-  it('uses the current Gemini OFF safety threshold for every adjustable category', () => {
+  it('uses explicit OFF for all four adjustable generateContent safety categories', () => {
     expect(SAFETY_SETTINGS).toHaveLength(4);
-    expect(SAFETY_SETTINGS.every((setting) => setting.threshold === 'off')).toBe(true);
+    expect(SAFETY_SETTINGS.map((setting) => setting.threshold)).toEqual(['OFF', 'OFF', 'OFF', 'OFF']);
+    expect(SAFETY_SETTINGS.map((setting) => setting.category)).toEqual([
+      'HARM_CATEGORY_HARASSMENT',
+      'HARM_CATEGORY_HATE_SPEECH',
+      'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+      'HARM_CATEGORY_DANGEROUS_CONTENT',
+    ]);
+  });
+
+  it('contains no Interactions calls or SDK type-check bypasses', () => {
+    const serviceSource = readFileSync(new URL('../services/geminiService.ts', import.meta.url), 'utf8');
+    expect(serviceSource).not.toContain('interactions.create');
+    expect(serviceSource).not.toContain('as never');
+    expect(serviceSource).toContain('ai.models.generateContent');
   });
 });

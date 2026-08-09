@@ -110,6 +110,10 @@ export interface AnalysisStageReport {
   usage: TokenUsageSummary;
   agenticVisionStatus: AgenticVisionStatus;
   inspections: AgenticInspection[];
+  attemptCount?: number;
+  retryReasons?: string[];
+  finishReason?: string | null;
+  promptBlockReason?: string | null;
 }
 
 export interface CostEstimate {
@@ -126,6 +130,8 @@ export interface AnalysisReport {
   createdAt: number;
   outcome: 'completed' | 'failed' | 'rejected';
   pipeline: AnalysisPipeline;
+  apiMethod?: 'generateContent';
+  safetyMode?: 'EXPLICIT_OFF';
   requestedModel: string;
   resolvedModels: string[];
   agenticVisionRequested: boolean;
@@ -140,6 +146,8 @@ export interface AnalysisReport {
     stage: string;
     reason: string;
     category: 'authentication' | 'quota' | 'model' | 'safety' | 'schema' | 'tool' | 'network' | 'unknown';
+    attemptCount?: number;
+    retryReasons?: string[];
   };
 }
 

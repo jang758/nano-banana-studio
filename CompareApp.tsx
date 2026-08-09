@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import { CheckCircle2, Columns2, Download, Eye, EyeOff, ImagePlus, LoaderCircle, RefreshCw, Sparkles, X } from 'lucide-react';
 import { runComparisonSide } from './services/comparisonService';
 import type {
+  AnalysisPipeline,
   AppSettings,
   CompareSession,
   CompareSideState,
@@ -28,7 +29,17 @@ interface Props {
   onSessionChange: Dispatch<SetStateAction<CompareSession>>;
 }
 
-function ResultCard({ title, subtitle, state }: { title: string; subtitle: string; state: CompareSideState }) {
+function ResultCard({
+  title,
+  subtitle,
+  state,
+  onRetry,
+}: {
+  title: string;
+  subtitle: string;
+  state: CompareSideState;
+  onRetry: () => void;
+}) {
   const { output, report, error, historyId, saveError } = state;
   return (
     <section className="compare-result">
@@ -54,7 +65,10 @@ function ResultCard({ title, subtitle, state }: { title: string; subtitle: strin
           <textarea className="compare-analysis" readOnly value={formatAnalysis(output.result, 'ko')} />
         </>
       ) : error ? (
-        <div className="compare-side-error">{error}</div>
+        <div className="compare-side-error">
+          <span>{error}</span>
+          <button className="secondary-button" onClick={onRetry}><RefreshCw size={14} /> 이 분석만 재시도</button>
+        </div>
       ) : (
         <div className="compare-empty">비교 분석을 실행하면 결과가 표시됩니다.</div>
       )}
@@ -126,13 +140,13 @@ export default function CompareApp({
     return () => window.removeEventListener('paste', onPaste);
   });
 
-  const run = async () => {
+  const run = async (pipelines: AnalysisPipeline[] = ['standard', 'harness']) => {
     if (!session.image || busy) return;
     setBusy(true);
     onSessionChange((current) => ({
       ...current,
-      standard: createCompareSideState(),
-      harness: createCompareSideState(),
+      ...(pipelines.includes('standard') ? { standard: createCompareSideState() } : {}),
+      ...(pipelines.includes('harness') ? { harness: createCompareSideState() } : {}),
       error: null,
     }));
     const common = {
@@ -141,11 +155,15 @@ export default function CompareApp({
       mimeType: session.image.mimeType,
       settings,
     };
-    const [standard, harness] = await Promise.all([
-      runComparisonSide({ ...common, pipeline: 'standard' }),
-      runComparisonSide({ ...common, pipeline: 'harness' }),
-    ]);
-    onSessionChange((current) => ({ ...current, standard, harness }));
+    const results = await Promise.all(pipelines.map(async (pipeline) => ({
+      pipeline,
+      result: await runComparisonSide({ ...common, pipeline }),
+    })));
+    onSessionChange((current) => {
+      const next = { ...current };
+      for (const { pipeline, result } of results) next[pipeline] = result;
+      return next;
+    });
     setBusy(false);
   };
 
@@ -278,8 +296,8 @@ export default function CompareApp({
         )}
 
         <div className="compare-grid">
-          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} />
-          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} />
+          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} onRetry={() => void run(['standard'])} />
+          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} onRetry={() => void run(['harness'])} />
         </div>
       </main>
     </div>

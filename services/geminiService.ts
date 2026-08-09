@@ -1,4 +1,14 @@
-import { GoogleGenAI } from '@google/genai';
+import {
+  FinishReason,
+  GoogleGenAI,
+  HarmBlockThreshold,
+  HarmCategory,
+  Outcome,
+  type GenerateContentConfig,
+  type GenerateContentParameters,
+  type GenerateContentResponse,
+  type SafetySetting,
+} from '@google/genai';
 import { z } from 'zod';
 import {
   ANALYSIS_SYSTEM_INSTRUCTION,
@@ -147,24 +157,52 @@ const CRITIQUE_JSON_SCHEMA = {
   additionalProperties: false,
 };
 
-export const SAFETY_SETTINGS = [
-  { type: 'harassment', threshold: 'off' },
-  { type: 'hate_speech', threshold: 'off' },
-  { type: 'sexually_explicit', threshold: 'off' },
-  { type: 'dangerous_content', threshold: 'off' },
+export const SAFETY_SETTINGS: SafetySetting[] = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.OFF },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.OFF },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.OFF },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.OFF },
 ];
 
-const imageInput = (base64: string, mimeType: string) => ({
-  type: 'image' as const,
-  data: base64,
-  mime_type: mimeType,
+export const MAX_API_ATTEMPTS = 3;
+
+const imagePart = (base64: string, mimeType: string) => ({
+  inlineData: { data: base64, mimeType },
 });
 
-const jsonFormat = (schema: Record<string, unknown>) => ({
-  type: 'text' as const,
-  mime_type: 'application/json' as const,
-  schema,
-});
+function structuredConfig(
+  systemInstruction: string,
+  schema: Record<string, unknown>,
+  agenticVision: boolean,
+): GenerateContentConfig {
+  return {
+    systemInstruction,
+    responseMimeType: 'application/json',
+    responseJsonSchema: schema,
+    safetySettings: SAFETY_SETTINGS,
+    ...(agenticVision ? { tools: [{ codeExecution: {} }] } : {}),
+  };
+}
+
+export function buildAnalysisRequest(options: {
+  model: string;
+  prompt: string;
+  systemInstruction: string;
+  schema: Record<string, unknown>;
+  base64?: string;
+  mimeType?: string;
+  agenticVision?: boolean;
+}): GenerateContentParameters {
+  const parts = [
+    { text: options.prompt },
+    ...(options.base64 && options.mimeType ? [imagePart(options.base64, options.mimeType)] : []),
+  ];
+  return {
+    model: options.model,
+    contents: { parts },
+    config: structuredConfig(options.systemInstruction, options.schema, options.agenticVision === true),
+  };
+}
 
 function createClient(apiKey: string): GoogleGenAI {
   const key = apiKey.trim();
@@ -191,24 +229,55 @@ function isAgenticUnsupported(error: unknown): boolean {
   return /code.?execution|tool.+not supported|unsupported.+tool|invalid tool/i.test(message);
 }
 
-function publicApiError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/api.?key|unauthenticated|permission|401|403/i.test(message)) {
-    return new Error('API 키가 유효하지 않거나 이 모델에 대한 권한이 없습니다.');
+interface ApiErrorShape {
+  message?: unknown;
+  status?: unknown;
+  statusCode?: unknown;
+  body?: unknown;
+  error?: { message?: unknown; error?: { message?: unknown } };
+}
+
+function apiErrorStatus(error: unknown): number | null {
+  const apiError = error as ApiErrorShape;
+  if (typeof apiError?.status === 'number') return apiError.status;
+  if (typeof apiError?.statusCode === 'number') return apiError.statusCode;
+  return null;
+}
+
+function apiErrorMessage(error: unknown): string {
+  const apiError = error as ApiErrorShape;
+  let message = [
+    apiError?.error?.error?.message,
+    apiError?.error?.message,
+    apiError?.message,
+  ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    ?? String(error);
+  if (typeof apiError?.body === 'string') {
+    try {
+      const body = JSON.parse(apiError.body) as { error?: { message?: unknown } };
+      if (typeof body.error?.message === 'string' && body.error.message.trim()) message = body.error.message;
+    } catch {
+      // JSON 본문이 아니면 SDK 메시지를 사용한다.
+    }
   }
-  if (/quota|resource.?exhausted|429/i.test(message)) {
-    return new Error('Gemini API 할당량을 초과했습니다. 잠시 후 다시 시도해 주세요.');
-  }
-  if (/not found|404|model/i.test(message) && /not found|404/i.test(message)) {
-    return new Error('선택한 모델을 현재 API 키에서 사용할 수 없습니다. 모델 목록을 새로고침해 주세요.');
-  }
-  if (/\b400\b|bad request/i.test(message)) {
-    return new Error('Gemini가 요청을 거부했습니다. API 키와 선택 모델을 확인해 주세요.');
-  }
-  const redacted = message
+  return message
     .replace(/AIza[A-Za-z0-9_-]+/g, '[REDACTED]')
     .replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED]');
-  return new Error(redacted || 'Gemini API 요청에 실패했습니다.');
+}
+
+export function publicApiError(error: unknown): Error {
+  const status = apiErrorStatus(error);
+  const detail = apiErrorMessage(error) || '세부 메시지가 반환되지 않았습니다.';
+  if (/api.?key|unauthenticated|permission|401|403/i.test(detail) || status === 401 || status === 403) {
+    return new Error(`Gemini API 인증 오류${status ? ` (${status})` : ''}: ${detail}`);
+  }
+  if (/quota|resource.?exhausted|429/i.test(detail) || status === 429) {
+    return new Error(`Gemini API 할당량 오류${status ? ` (${status})` : ''}: ${detail}`);
+  }
+  if ((/not found|404|model/i.test(detail) && /not found|404/i.test(detail)) || status === 404) {
+    return new Error(`Gemini API 모델 오류${status ? ` (${status})` : ''}: ${detail}`);
+  }
+  return new Error(`Gemini API 오류${status ? ` (${status})` : ''}: ${detail}`);
 }
 
 type FailureCategory = NonNullable<AnalysisReport['failure']>['category'];
@@ -217,57 +286,56 @@ function failureCategory(message: string): FailureCategory {
   if (/api 키|api.?key|unauthenticated|permission|401|403/i.test(message)) return 'authentication';
   if (/quota|할당량|resource.?exhausted|429/i.test(message)) return 'quota';
   if (/model|모델|not found|404/i.test(message)) return 'model';
-  if (/safety|blocked|refus|거절|policy|prohibited/i.test(message)) return 'safety';
+  if (/safety|blocked|blocklist|refus|거절|차단|policy|prohibited/i.test(message)) return 'safety';
   if (/schema|json|스키마/i.test(message)) return 'schema';
   if (/code.?execution|tool|도구/i.test(message)) return 'tool';
   if (/network|fetch|timeout|연결/i.test(message)) return 'network';
   return 'unknown';
 }
 
-function readAgenticStatus(steps: Array<{ type?: string; is_error?: boolean }> | undefined): AgenticVisionStatus {
-  const call = steps?.some((step) => step.type === 'code_execution_call') ?? false;
-  const results = steps?.filter((step) => step.type === 'code_execution_result') ?? [];
-  if (!call) return 'AVAILABLE_NOT_USED';
-  if (results.some((step) => step.is_error)) return 'USED_FAILED';
-  return results.length > 0 ? 'USED_OK' : 'USED_FAILED';
+function isRetryableApiError(error: unknown): boolean {
+  const status = apiErrorStatus(error);
+  if (status === 429 || (status !== null && status >= 500)) return true;
+  return /failed to fetch|network.?error|econnreset|etimedout|timeout|연결.*(실패|끊)/i.test(apiErrorMessage(error));
 }
 
-interface InteractionUsage {
-  total_input_tokens?: number;
-  total_output_tokens?: number;
-  total_thought_tokens?: number;
-  total_tool_use_tokens?: number;
-  total_cached_tokens?: number;
-  total_tokens?: number;
+export interface GenerateContentAttemptResult {
+  response: GenerateContentResponse;
+  attemptCount: number;
+  retryReasons: string[];
 }
 
-interface InteractionStep {
-  type?: string;
-  id?: string;
-  call_id?: string;
-  is_error?: boolean;
-  arguments?: { code?: string; language?: string };
-  result?: string;
-  error?: { message?: string };
+export type GenerateContentInvoker = (request: GenerateContentParameters) => Promise<GenerateContentResponse>;
+
+export async function callGenerateContentWithRetry(
+  generate: GenerateContentInvoker,
+  request: GenerateContentParameters,
+  wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  onProgress?: (attemptCount: number, retryReasons: string[]) => void,
+): Promise<GenerateContentAttemptResult> {
+  const retryReasons: string[] = [];
+  for (let attempt = 1; attempt <= MAX_API_ATTEMPTS; attempt += 1) {
+    onProgress?.(attempt, [...retryReasons]);
+    try {
+      return { response: await generate(request), attemptCount: attempt, retryReasons };
+    } catch (error) {
+      if (attempt === MAX_API_ATTEMPTS || !isRetryableApiError(error)) throw error;
+      retryReasons.push(publicApiError(error).message);
+      onProgress?.(attempt, [...retryReasons]);
+      await wait(attempt * 500);
+    }
+  }
+  throw new Error('Gemini API 재시도 흐름이 비정상적으로 종료됐습니다.');
 }
 
-interface InteractionResponse {
-  output_text?: string;
-  output_image?: { data?: string; mime_type?: string };
-  steps?: InteractionStep[];
-  model?: string;
-  status?: string;
-  usage?: InteractionUsage;
-}
-
-function usageFromResponse(response: InteractionResponse): TokenUsageSummary {
+function usageFromResponse(response: GenerateContentResponse): TokenUsageSummary {
   return {
-    inputTokens: response.usage?.total_input_tokens ?? 0,
-    outputTokens: response.usage?.total_output_tokens ?? 0,
-    thoughtTokens: response.usage?.total_thought_tokens ?? 0,
-    toolUseTokens: response.usage?.total_tool_use_tokens ?? 0,
-    cachedTokens: response.usage?.total_cached_tokens ?? 0,
-    totalTokens: response.usage?.total_tokens ?? 0,
+    inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+    thoughtTokens: response.usageMetadata?.thoughtsTokenCount ?? 0,
+    toolUseTokens: response.usageMetadata?.toolUsePromptTokenCount ?? 0,
+    cachedTokens: response.usageMetadata?.cachedContentTokenCount ?? 0,
+    totalTokens: response.usageMetadata?.totalTokenCount ?? 0,
   };
 }
 
@@ -292,47 +360,77 @@ function inspectionPurpose(code: string): string {
   return clipped(printText, 220) || '모델이 필요하다고 판단한 확대·좌표·픽셀 확인';
 }
 
-function inspectionsFromResponse(response: InteractionResponse): AgenticInspection[] {
-  const calls = response.steps?.filter((step) => step.type === 'code_execution_call') ?? [];
-  const results = response.steps?.filter((step) => step.type === 'code_execution_result') ?? [];
+function responseParts(response: GenerateContentResponse) {
+  return response.candidates?.flatMap((candidate) => candidate.content?.parts ?? []) ?? [];
+}
+
+function inspectionsFromResponse(response: GenerateContentResponse): AgenticInspection[] {
+  const calls = responseParts(response).filter((part) => part.executableCode).map((part) => part.executableCode!);
+  const results = responseParts(response).filter((part) => part.codeExecutionResult).map((part) => part.codeExecutionResult!);
   return calls.map((call, index) => {
-    const code = call.arguments?.code ?? '';
-    const result = results.find((candidate) => candidate.call_id === call.id) ?? results[index];
+    const code = call.code ?? '';
+    const result = results.find((candidate) => candidate.id && candidate.id === call.id) ?? results[index];
     return {
       index: index + 1,
       area: inspectionArea(code),
       purpose: inspectionPurpose(code),
       codeExcerpt: clipped(code),
-      resultExcerpt: clipped(result?.result),
-      status: result ? (result.is_error ? 'failed' : 'ok') : 'unknown',
+      resultExcerpt: clipped(result?.output),
+      status: result ? (result.outcome === Outcome.OUTCOME_OK ? 'ok' : 'failed') : 'unknown',
     };
   });
 }
 
-function assertInteractionCompleted(response: InteractionResponse, stage: string): void {
-  const stepError = response.steps?.find((step) => step.error?.message)?.error?.message;
-  if (stepError) throw new Error(`${stage} 모델 오류: ${stepError}`);
-  if (response.status && response.status !== 'completed') {
-    throw new Error(`${stage} 요청이 완료되지 않았습니다. API 상태: ${response.status}`);
+function readAgenticStatus(response: GenerateContentResponse): AgenticVisionStatus {
+  const inspections = inspectionsFromResponse(response);
+  if (!inspections.length) return 'AVAILABLE_NOT_USED';
+  return inspections.some((inspection) => inspection.status !== 'ok') ? 'USED_FAILED' : 'USED_OK';
+}
+
+function responseFinishReason(response: GenerateContentResponse): string | null {
+  return response.candidates?.[0]?.finishReason ?? null;
+}
+
+function responsePromptBlockReason(response: GenerateContentResponse): string | null {
+  return response.promptFeedback?.blockReason ?? null;
+}
+
+function assertGenerateContentCompleted(response: GenerateContentResponse, stage: string): void {
+  const promptBlock = responsePromptBlockReason(response);
+  if (promptBlock) {
+    const detail = response.promptFeedback?.blockReasonMessage;
+    throw new Error(`${stage} 요청 차단: ${promptBlock}${detail ? ` - ${detail}` : ''}`);
+  }
+  const finishReason = responseFinishReason(response);
+  if (finishReason && finishReason !== FinishReason.STOP) {
+    const detail = response.candidates?.[0]?.finishMessage;
+    throw new Error(`${stage} 응답 중단: ${finishReason}${detail ? ` - ${detail}` : ''}`);
   }
 }
 
-function stageReport(
+export function stageReport(
   name: string,
   requestedModel: string,
-  response: InteractionResponse,
+  call: GenerateContentAttemptResult,
   durationMs: number,
   agenticVisionStatus: AgenticVisionStatus,
 ): AnalysisStageReport {
+  const { response } = call;
+  const promptBlockReason = responsePromptBlockReason(response);
+  const finishReason = responseFinishReason(response);
   return {
     name,
     requestedModel,
-    resolvedModel: response.model || requestedModel,
+    resolvedModel: response.modelVersion || requestedModel,
     durationMs,
-    status: response.status || 'completed',
+    status: promptBlockReason ? `PROMPT_${promptBlockReason}` : finishReason || 'COMPLETED',
     usage: usageFromResponse(response),
     agenticVisionStatus,
     inspections: inspectionsFromResponse(response),
+    attemptCount: call.attemptCount,
+    retryReasons: call.retryReasons,
+    finishReason,
+    promptBlockReason,
   };
 }
 
@@ -352,6 +450,8 @@ function completedReport(options: {
     createdAt: Date.now(),
     outcome: 'completed',
     pipeline: options.pipeline,
+    apiMethod: 'generateContent',
+    safetyMode: 'EXPLICIT_OFF',
     requestedModel: options.requestedModel,
     resolvedModels: [...new Set(options.stages.map((stage) => stage.resolvedModel))],
     agenticVisionRequested: options.agenticVisionRequested,
@@ -379,41 +479,32 @@ interface RunTracker {
   stage: string;
   stages: AnalysisStageReport[];
   agenticVisionStatus: AgenticVisionStatus;
+  attemptCount: number;
+  retryReasons: string[];
 }
 
-async function interactionWithOptionalVision(
-  ai: GoogleGenAI,
-  request: Record<string, unknown>,
-  enabled: boolean,
-): Promise<{ response: InteractionResponse; status: AgenticVisionStatus }> {
-  if (!enabled) {
-    const response = await ai.interactions.create(request as never) as InteractionResponse;
-    return { response, status: 'DISABLED' };
-  }
-
-  try {
-    const response = await ai.interactions.create({
-      ...request,
-      tools: [{ type: 'code_execution' }],
-      generation_config: {
-        ...((request.generation_config as Record<string, unknown> | undefined) ?? {}),
-        thinking_level: 'high',
-        tool_choice: 'auto',
-      },
-    } as never) as InteractionResponse;
-    return {
-      response,
-      status: readAgenticStatus(response.steps),
-    };
-  } catch (error) {
-    if (!isAgenticUnsupported(error)) throw error;
-    const response = await ai.interactions.create(request as never) as InteractionResponse;
-    return { response, status: 'UNSUPPORTED' };
-  }
+async function runGenerateContentStage(
+  generate: GenerateContentInvoker,
+  request: GenerateContentParameters,
+  agenticVision: boolean,
+  tracker: RunTracker,
+): Promise<{ call: GenerateContentAttemptResult; status: AgenticVisionStatus }> {
+  const call = await callGenerateContentWithRetry(
+    generate,
+    request,
+    undefined,
+    (attemptCount, retryReasons) => {
+      tracker.attemptCount = attemptCount;
+      tracker.retryReasons = retryReasons;
+    },
+  );
+  const status = agenticVision ? readAgenticStatus(call.response) : 'DISABLED';
+  tracker.agenticVisionStatus = status;
+  return { call, status };
 }
 
 async function analyzeStandard(
-  ai: GoogleGenAI,
+  generate: GenerateContentInvoker,
   base64: string,
   mimeType: string,
   model: string,
@@ -423,25 +514,25 @@ async function analyzeStandard(
   const started = performance.now();
   tracker.stage = '기존 1회 분석';
   const callStarted = performance.now();
-  const { response, status } = await interactionWithOptionalVision(ai, {
+  const { call, status } = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
-    store: false,
-    system_instruction: ANALYSIS_SYSTEM_INSTRUCTION,
-    input: [imageInput(base64, mimeType), { type: 'text', text: STANDARD_ANALYSIS_REQUEST }],
-    response_format: jsonFormat(ANALYSIS_JSON_SCHEMA),
-    safety_settings: SAFETY_SETTINGS,
-  }, agenticVision);
-  tracker.agenticVisionStatus = status;
+    prompt: STANDARD_ANALYSIS_REQUEST,
+    systemInstruction: ANALYSIS_SYSTEM_INSTRUCTION,
+    schema: ANALYSIS_JSON_SCHEMA,
+    base64,
+    mimeType,
+    agenticVision,
+  }), agenticVision, tracker);
   const reportStage = stageReport(
     tracker.stage,
     model,
-    response,
+    call,
     Math.round(performance.now() - callStarted),
     status,
   );
   tracker.stages.push(reportStage);
-  assertInteractionCompleted(response, tracker.stage);
-  const result = parseJson(response.output_text, analysisResultSchema, '기존 분석');
+  assertGenerateContentCompleted(call.response, tracker.stage);
+  const result = parseJson(call.response.text, analysisResultSchema, '기존 분석');
   const totalDurationMs = Math.round(performance.now() - started);
   return {
     result,
@@ -464,7 +555,7 @@ async function analyzeStandard(
 }
 
 async function analyzeHarness(
-  ai: GoogleGenAI,
+  generate: GenerateContentInvoker,
   base64: string,
   mimeType: string,
   model: string,
@@ -475,73 +566,62 @@ async function analyzeHarness(
 
   tracker.stage = '증거 수집';
   let stageStarted = performance.now();
-  const evidenceCall = await interactionWithOptionalVision(ai, {
+  const evidenceCall = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
-    store: false,
-    system_instruction: HARNESS_EVIDENCE_INSTRUCTION,
-    input: [
-      imageInput(base64, mimeType),
-      { type: 'text', text: 'Extract a structured evidence ledger for faithful image reconstruction.' },
-    ],
-    response_format: jsonFormat(EVIDENCE_JSON_SCHEMA),
-    safety_settings: SAFETY_SETTINGS,
-  }, agenticVision);
-  tracker.agenticVisionStatus = evidenceCall.status;
+    prompt: 'Extract a structured evidence ledger for faithful image reconstruction.',
+    systemInstruction: HARNESS_EVIDENCE_INSTRUCTION,
+    schema: EVIDENCE_JSON_SCHEMA,
+    base64,
+    mimeType,
+    agenticVision,
+  }), agenticVision, tracker);
   tracker.stages.push(stageReport(
     tracker.stage,
     model,
-    evidenceCall.response,
+    evidenceCall.call,
     Math.round(performance.now() - stageStarted),
     evidenceCall.status,
   ));
-  assertInteractionCompleted(evidenceCall.response, tracker.stage);
-  const evidence = parseJson(evidenceCall.response.output_text, harnessEvidenceSchema, '증거 수집') as HarnessEvidence;
+  assertGenerateContentCompleted(evidenceCall.call.response, tracker.stage);
+  const evidence = parseJson(evidenceCall.call.response.text, harnessEvidenceSchema, '증거 수집') as HarnessEvidence;
 
   tracker.stage = '교차 비평';
   stageStarted = performance.now();
-  const criticResponse = await ai.interactions.create({
+  const criticCall = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
-    store: false,
-    system_instruction: HARNESS_CRITIC_INSTRUCTION,
-    input: `Audit this evidence ledger:\n${JSON.stringify(evidence)}`,
-    response_format: jsonFormat(CRITIQUE_JSON_SCHEMA),
-    safety_settings: SAFETY_SETTINGS,
-  } as never) as InteractionResponse;
+    prompt: `Audit this evidence ledger:\n${JSON.stringify(evidence)}`,
+    systemInstruction: HARNESS_CRITIC_INSTRUCTION,
+    schema: CRITIQUE_JSON_SCHEMA,
+  }), false, tracker);
   tracker.stages.push(stageReport(
     tracker.stage,
     model,
-    criticResponse,
+    criticCall.call,
     Math.round(performance.now() - stageStarted),
     'DISABLED',
   ));
-  assertInteractionCompleted(criticResponse, tracker.stage);
-  const critique = parseJson(criticResponse.output_text, harnessCritiqueSchema, '비평') as HarnessCritique;
+  assertGenerateContentCompleted(criticCall.call.response, tracker.stage);
+  const critique = parseJson(criticCall.call.response.text, harnessCritiqueSchema, '비평') as HarnessCritique;
 
   tracker.stage = '최종 합성';
   stageStarted = performance.now();
-  const synthesisResponse = await ai.interactions.create({
+  const synthesisCall = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
-    store: false,
-    system_instruction: HARNESS_SYNTHESIS_INSTRUCTION,
-    input: [
-      imageInput(base64, mimeType),
-      {
-        type: 'text',
-        text: `Evidence ledger:\n${JSON.stringify(evidence)}\n\nCritique:\n${JSON.stringify(critique)}\n\nReturn the final bilingual analysis and reconstruction prompt.`,
-      },
-    ],
-    response_format: jsonFormat(ANALYSIS_JSON_SCHEMA),
-    safety_settings: SAFETY_SETTINGS,
-  } as never) as InteractionResponse;
+    prompt: `Evidence ledger:\n${JSON.stringify(evidence)}\n\nCritique:\n${JSON.stringify(critique)}\n\nReturn the final bilingual analysis and reconstruction prompt.`,
+    systemInstruction: HARNESS_SYNTHESIS_INSTRUCTION,
+    schema: ANALYSIS_JSON_SCHEMA,
+    base64,
+    mimeType,
+  }), false, tracker);
   tracker.stages.push(stageReport(
     tracker.stage,
     model,
-    synthesisResponse,
+    synthesisCall.call,
     Math.round(performance.now() - stageStarted),
     'DISABLED',
   ));
-  assertInteractionCompleted(synthesisResponse, tracker.stage);
-  const result = parseJson(synthesisResponse.output_text, analysisResultSchema, '최종 합성');
+  assertGenerateContentCompleted(synthesisCall.call.response, tracker.stage);
+  const result = parseJson(synthesisCall.call.response.text, analysisResultSchema, '최종 합성');
   const totalDurationMs = Math.round(performance.now() - started);
 
   return {
@@ -573,27 +653,36 @@ export async function analyzeImage(options: {
   model: string;
   pipeline: AnalysisPipeline;
   agenticVision: boolean;
-}): Promise<AnalysisOutput> {
+}, dependencies: { generateContent?: GenerateContentInvoker } = {}): Promise<AnalysisOutput> {
   const started = performance.now();
   const tracker: RunTracker = {
     stage: '초기화',
     stages: [],
     agenticVisionStatus: options.agenticVision ? 'AVAILABLE_NOT_USED' : 'DISABLED',
+    attemptCount: 0,
+    retryReasons: [],
   };
   try {
-    const ai = createClient(options.apiKey);
+    let generateContent = dependencies.generateContent;
+    if (!generateContent) {
+      const ai = createClient(options.apiKey);
+      generateContent = (parameters: GenerateContentParameters) => ai.models.generateContent(parameters);
+    }
     return options.pipeline === 'standard'
-      ? await analyzeStandard(ai, options.base64, options.mimeType, options.model, options.agenticVision, tracker)
-      : await analyzeHarness(ai, options.base64, options.mimeType, options.model, options.agenticVision, tracker);
+      ? await analyzeStandard(generateContent, options.base64, options.mimeType, options.model, options.agenticVision, tracker)
+      : await analyzeHarness(generateContent, options.base64, options.mimeType, options.model, options.agenticVision, tracker);
   } catch (error) {
     const publicError = publicApiError(error);
     const category = failureCategory(publicError.message);
+    if (options.agenticVision && isAgenticUnsupported(publicError)) tracker.agenticVisionStatus = 'UNSUPPORTED';
     const inspections = tracker.stages.flatMap((stage) => stage.inspections);
     const report: AnalysisReport = {
       reportVersion: 1,
       createdAt: Date.now(),
       outcome: category === 'safety' ? 'rejected' : 'failed',
       pipeline: options.pipeline,
+      apiMethod: 'generateContent',
+      safetyMode: 'EXPLICIT_OFF',
       requestedModel: options.model,
       resolvedModels: [...new Set(tracker.stages.map((stage) => stage.resolvedModel))],
       agenticVisionRequested: options.agenticVision,
@@ -614,6 +703,8 @@ export async function analyzeImage(options: {
         stage: tracker.stage,
         category,
         reason: publicError.message,
+        attemptCount: tracker.attemptCount,
+        retryReasons: tracker.retryReasons,
       },
     };
     throw new AnalysisRunError(publicError.message, report);
@@ -665,30 +756,28 @@ export async function generateImageFromPrompt(options: {
 }): Promise<{ base64: string; mimeType: string }> {
   const ai = createClient(options.apiKey);
   try {
-    const response = await ai.interactions.create({
+    const request: GenerateContentParameters = {
       model: options.settings.generationModel,
-      store: false,
-      input: options.prompt,
-      response_modalities: ['image'],
-      response_format: {
-        type: 'image',
-        mime_type: 'image/jpeg',
-        delivery: 'inline',
-        aspect_ratio: options.settings.aspectRatio,
-        image_size: options.settings.imageSize,
-      },
-      generation_config: {
-        image_config: {
-          aspect_ratio: options.settings.aspectRatio,
-          image_size: options.settings.imageSize,
+      contents: options.prompt,
+      config: {
+        safetySettings: SAFETY_SETTINGS,
+        responseModalities: ['IMAGE'],
+        imageConfig: {
+          aspectRatio: options.settings.aspectRatio,
+          imageSize: options.settings.imageSize,
         },
       },
-      safety_settings: SAFETY_SETTINGS,
-    } as never);
-    if (!response.output_image?.data) throw new Error('모델이 이미지 데이터를 반환하지 않았습니다.');
+    };
+    const { response } = await callGenerateContentWithRetry(
+      (parameters) => ai.models.generateContent(parameters),
+      request,
+    );
+    assertGenerateContentCompleted(response, '이미지 생성');
+    const inlineData = responseParts(response).find((part) => part.inlineData)?.inlineData;
+    if (!inlineData?.data) throw new Error('모델이 이미지 데이터를 반환하지 않았습니다.');
     return {
-      base64: response.output_image.data,
-      mimeType: response.output_image.mime_type || 'image/jpeg',
+      base64: inlineData.data,
+      mimeType: inlineData.mimeType || 'image/jpeg',
     };
   } catch (error) {
     throw publicApiError(error);

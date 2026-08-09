@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisReport, AnalysisStageReport } from '../types';
 import { estimateCost, formatAnalysisReport } from '../utils/analysisReport';
-import { AnalysisRunError, analyzeImage } from '../services/geminiService';
+import { AnalysisRunError, analyzeImage, publicApiError } from '../services/geminiService';
 
 const stage: AnalysisStageReport = {
   name: '증거 수집',
@@ -85,5 +85,16 @@ describe('analysis report', () => {
       expect(runError.report.requestedModel).toBe('gemini-pro-latest');
       expect(runError.report.agenticVisionRequested).toBe(true);
     }
+  });
+
+  it('shows the real nested Gemini error while redacting API keys', () => {
+    const error = publicApiError({
+      status: 400,
+      message: '400 API error occurred',
+      error: { error: { message: 'Invalid value at response_format for key=AIzaSECRET123' } },
+    });
+    expect(error.message).toContain('Invalid value at response_format');
+    expect(error.message).toContain('[REDACTED]');
+    expect(error.message).not.toContain('AIzaSECRET123');
   });
 });

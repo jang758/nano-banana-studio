@@ -39,6 +39,7 @@ export function AnalysisReportView({ report }: { report: AnalysisReport }) {
       <div className="report-body">
         <div className="report-metrics">
           <span><small>실행 결과</small><b>{report.outcome}</b></span>
+          <span><small>API / Safety</small><b>{report.apiMethod || '기록 없음'}<br />{report.safetyMode || '기록 없음'}</b></span>
           <span><small>선택 / 실행 모델</small><b>{report.requestedModel}<br />{report.resolvedModels.join(', ') || '응답 없음'}</b></span>
           <span><small>Agentic Vision 직접 귀속 추정</small><b>{formatUsd(report.cost.agenticAttributedUsd)}</b></span>
           <span><small>토큰 / 시간</small><b>{report.usage.totalTokens.toLocaleString()} / {(report.totalDurationMs / 1000).toFixed(2)}s</b></span>

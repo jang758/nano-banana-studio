@@ -377,6 +377,13 @@ export function WorkspaceSlot({
       {slot.error && (
         <div className="error-banner">
           <span>{slot.error}</span>
+          {slot.originalImage && (
+            <button
+              className="text-action"
+              disabled={busy}
+              onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png')}
+            ><RefreshCw size={13} /> 수동 재시도</button>
+          )}
           <button aria-label="오류 닫기" onClick={() => onUpdate(slot.id, { error: null, status: 'idle' })}><X size={15} /></button>
         </div>
       )}
