@@ -1,4 +1,5 @@
 export type AnalysisPipeline = 'standard' | 'harness';
+export type StudioView = AnalysisPipeline | 'compare';
 
 export type AgenticVisionStatus =
   | 'DISABLED'
@@ -164,6 +165,26 @@ export interface WorkspaceSlot {
   trace: AnalysisTrace | null;
   report: AnalysisReport | null;
   savedHistoryId: string | null;
+}
+
+export interface PipelineWorkspaceSession {
+  slots: WorkspaceSlot[];
+  activeSlotId: string | null;
+}
+
+export interface CompareSideState {
+  output: AnalysisOutput | null;
+  report: AnalysisReport | null;
+  error: string | null;
+  historyId: string | null;
+  saveError: string | null;
+}
+
+export interface CompareSession {
+  image: { base64: string; mimeType: string } | null;
+  standard: CompareSideState;
+  harness: CompareSideState;
+  error: string | null;
 }
 
 export interface HistoryMetadata {

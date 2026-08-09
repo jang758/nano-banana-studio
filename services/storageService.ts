@@ -221,6 +221,11 @@ export async function getHistoryPage(limit = 60, before?: number): Promise<Histo
   };
 }
 
+export async function getHistoryCount(): Promise<number> {
+  const db = await getDatabase();
+  return db.count(SESSION_STORE);
+}
+
 export async function searchHistory(query: string): Promise<HistoryMetadata[]> {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return (await getHistoryPage()).items;

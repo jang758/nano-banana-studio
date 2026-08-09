@@ -168,7 +168,7 @@ const jsonFormat = (schema: Record<string, unknown>) => ({
 
 function createClient(apiKey: string): GoogleGenAI {
   const key = apiKey.trim();
-  if (!key) throw new Error('API 키를 먼저 입력해 주세요. 키는 현재 실행 중인 메모리에만 보관됩니다.');
+  if (!key) throw new Error('API 키를 먼저 입력해 주세요. 키는 앱이 실행되는 동안 메모리에만 보관됩니다.');
   return new GoogleGenAI({ apiKey: key });
 }
 
@@ -201,6 +201,9 @@ function publicApiError(error: unknown): Error {
   }
   if (/not found|404|model/i.test(message) && /not found|404/i.test(message)) {
     return new Error('선택한 모델을 현재 API 키에서 사용할 수 없습니다. 모델 목록을 새로고침해 주세요.');
+  }
+  if (/\b400\b|bad request/i.test(message)) {
+    return new Error('Gemini가 요청을 거부했습니다. API 키와 선택 모델을 확인해 주세요.');
   }
   const redacted = message
     .replace(/AIza[A-Za-z0-9_-]+/g, '[REDACTED]')

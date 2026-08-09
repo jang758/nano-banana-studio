@@ -65,7 +65,7 @@ export function SettingsPanel({
                 {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-            <p className="settings-help">키는 이 탭의 메모리에만 있으며 저장·히스토리·내보내기에 포함되지 않습니다.</p>
+            <p className="settings-help">키는 앱이 실행되는 동안 메모리에만 있으며 저장·히스토리·내보내기에 포함되지 않습니다.</p>
             <button className="secondary-button w-full" disabled={!apiKey.trim() || modelRefreshState === 'loading'} onClick={onRefreshModels}>
               {modelRefreshState === 'loading' ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />}
               API 모델 전체 새로고침

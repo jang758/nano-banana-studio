@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getClipboardImage } from '../utils/imageInput';
+import { getClipboardImage, takeSelectedFile } from '../utils/imageInput';
 
 const file = (type: string) => ({ type }) as File;
 
@@ -28,5 +28,14 @@ describe('getClipboardImage', () => {
       files: [file('application/pdf')] as unknown as FileList,
     });
     expect(result).toBeNull();
+  });
+});
+
+describe('takeSelectedFile', () => {
+  it('returns the selected file and clears the input so the same file can be selected again', () => {
+    const selected = file('image/png');
+    const input = { files: [selected] as unknown as FileList, value: 'C:\\fakepath\\sample.png' };
+    expect(takeSelectedFile(input)).toBe(selected);
+    expect(input.value).toBe('');
   });
 });

@@ -7,6 +7,7 @@ import { formatUsd } from '../utils/analysisReport';
 
 interface Props {
   items: HistoryMetadata[];
+  totalItems: number;
   isOpen: boolean;
   hasMore: boolean;
   onClose: () => void;
@@ -67,7 +68,7 @@ function HistoryRow({ item, onSelect, onDelete }: {
   );
 }
 
-export function HistorySidebar({ items, isOpen, hasMore, onClose, onSelect, onLoadMore, onSearch, onDelete, onClear }: Props) {
+export function HistorySidebar({ items, totalItems, isOpen, hasMore, onClose, onSelect, onLoadMore, onSearch, onDelete, onClear }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [storage, setStorage] = useState<StorageStatus>({ supported: true, persisted: false, usage: 0, quota: 0 });
@@ -136,7 +137,7 @@ export function HistorySidebar({ items, isOpen, hasMore, onClose, onSelect, onLo
               {storage.persisted ? '지속 저장 허용됨' : '지속 저장 요청'}
             </button>
           </div>
-          <button className="secondary-button w-full" disabled={exporting || !items.length} onClick={async () => {
+          <button className="secondary-button w-full" disabled={exporting || totalItems === 0} onClick={async () => {
             setExporting(true);
             try {
               await exportAllHistory((done, total) => setExportProgress(`${done} / ${total}`));
@@ -150,7 +151,7 @@ export function HistorySidebar({ items, isOpen, hasMore, onClose, onSelect, onLo
             {exporting ? <LoaderCircle className="animate-spin" size={14} /> : <Download size={14} />}
             {exporting ? `내보내는 중 ${exportProgress}` : '전체 원본 + 분석 ZIP 내보내기'}
           </button>
-          <button className="danger-text-button" disabled={!items.length} onClick={async () => {
+          <button className="danger-text-button" disabled={totalItems === 0} onClick={async () => {
             if (!confirm('새 저장소의 히스토리와 이미지 파일을 모두 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
             await onClear();
           }}><Trash2 size={13} /> 전체 삭제</button>

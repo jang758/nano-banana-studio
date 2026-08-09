@@ -4,7 +4,6 @@ import {
   Copy,
   Download,
   Expand,
-  FileText,
   ImagePlus,
   LoaderCircle,
   RefreshCw,
@@ -16,8 +15,8 @@ import {
 import { AnalysisRunError, analyzeImage, generateImageFromPrompt } from '../services/geminiService';
 import type { AnalysisPipeline, AppSettings, ModalData, WorkspaceSlot as Slot } from '../types';
 import { formatAnalysis } from '../utils/analysisFormat';
-import { formatAnalysisReport, formatUsd } from '../utils/analysisReport';
-import { getClipboardImage } from '../utils/imageInput';
+import { getClipboardImage, readImageFile, takeSelectedFile } from '../utils/imageInput';
+import { agenticLabel, AnalysisReportView } from './AnalysisReportView';
 
 interface Props {
   slot: Slot;
@@ -26,6 +25,7 @@ interface Props {
   pipeline: AnalysisPipeline;
   apiKey: string;
   isPasteTarget: boolean;
+  canDelete: boolean;
   onActivate: () => void;
   onUpdate: (id: string, updates: Partial<Slot>) => void;
   onSave: (slot: Slot, type: 'analysis' | 'generation' | 'edit') => Promise<string>;
@@ -35,14 +35,6 @@ interface Props {
 
 const dataUrl = (base64: string, mimeType: string | null) => `data:${mimeType || 'image/png'};base64,${base64}`;
 
-const agenticLabel: Record<string, string> = {
-  DISABLED: '정밀검사 꺼짐',
-  AVAILABLE_NOT_USED: '정밀검사 불필요',
-  USED_OK: '정밀검사 사용 완료',
-  USED_FAILED: '정밀검사 실행 실패',
-  UNSUPPORTED: '모델 미지원',
-};
-
 export function WorkspaceSlot({
   slot,
   index,
@@ -50,6 +42,7 @@ export function WorkspaceSlot({
   pipeline,
   apiKey,
   isPasteTarget,
+  canDelete,
   onActivate,
   onUpdate,
   onSave,
@@ -95,24 +88,14 @@ export function WorkspaceSlot({
       onUpdate(slot.id, {
         status: 'error',
         error: error instanceof Error ? error.message : '분석에 실패했습니다.',
-        report: error instanceof AnalysisRunError ? error.report : null,
+        ...(error instanceof AnalysisRunError ? { report: error.report } : {}),
       });
     }
   };
 
   const useFile = async (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      onUpdate(slot.id, { status: 'error', error: '이미지 파일만 사용할 수 있습니다.' });
-      return;
-    }
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      });
-      const mimeType = file.type || 'image/png';
+      const { base64, mimeType } = await readImageFile(file);
       onUpdate(slot.id, {
         originalImage: base64,
         originalMimeType: mimeType,
@@ -182,22 +165,23 @@ export function WorkspaceSlot({
     }
   };
 
+  const saveCurrent = async () => {
+    if (!slot.rawAnalysis || busy) return;
+    onUpdate(slot.id, { status: 'saving', error: null });
+    try {
+      const id = await onSave(slot, slot.generatedImage ? 'edit' : 'analysis');
+      onUpdate(slot.id, { status: 'idle', savedHistoryId: id });
+    } catch (error) {
+      onUpdate(slot.id, { status: 'error', error: error instanceof Error ? error.message : '히스토리에 저장하지 못했습니다.' });
+    }
+  };
+
   const download = (base64: string, mimeType: string | null) => {
     const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
     const anchor = document.createElement('a');
     anchor.href = dataUrl(base64, mimeType);
     anchor.download = `nano-banana-${Date.now()}.${extension}`;
     anchor.click();
-  };
-
-  const downloadReport = () => {
-    if (!slot.report) return;
-    const url = URL.createObjectURL(new Blob([formatAnalysisReport(slot.report)], { type: 'text/markdown;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `nano-banana-report-${new Date(slot.report.createdAt).toISOString().replace(/[:.]/g, '-')}.md`;
-    anchor.click();
-    URL.revokeObjectURL(url);
   };
 
   const copyText = async (kind: 'analysis' | 'prompt', text: string) => {
@@ -219,6 +203,7 @@ export function WorkspaceSlot({
       onDrop={(event) => {
         event.preventDefault();
         setDragging(false);
+        if (busy) return;
         const file = event.dataTransfer.files[0];
         if (file) void useFile(file);
       }}
@@ -231,10 +216,10 @@ export function WorkspaceSlot({
         <div className="flex items-center gap-2">
           {slot.trace && (
             <span className={`trace-chip trace-${slot.trace.agenticVisionStatus.toLowerCase()}`}>
-              {agenticLabel[slot.trace.agenticVisionStatus]}
+              {agenticLabel(slot.trace.agenticVisionStatus)}
             </span>
           )}
-          <button className="icon-button small" onClick={() => onDelete(slot.id)} aria-label="작업 공간 삭제"><Trash2 size={14} /></button>
+          {canDelete && <button className="icon-button small" disabled={busy} onClick={() => onDelete(slot.id)} aria-label="작업 공간 삭제"><Trash2 size={14} /></button>}
         </div>
       </div>
 
@@ -252,16 +237,33 @@ export function WorkspaceSlot({
             className="image-stage"
             role="button"
             tabIndex={0}
-            onClick={() => !slot.originalImage && inputRef.current?.click()}
-            onKeyDown={(event) => event.key === 'Enter' && inputRef.current?.click()}
+            onClick={() => !busy && !slot.originalImage && inputRef.current?.click()}
+            onKeyDown={(event) => !busy && !slot.originalImage && event.key === 'Enter' && inputRef.current?.click()}
           >
             {slot.originalImage ? (
               <>
                 <img src={dataUrl(slot.originalImage, slot.originalMimeType)} alt="분석 원본" />
                 <div className="image-actions">
-                  <button onClick={(event) => { event.stopPropagation(); onOpenModal({ base64: slot.originalImage!, mimeType: slot.originalMimeType || 'image/png' }); }}><Expand size={15} /></button>
-                  <button onClick={(event) => { event.stopPropagation(); download(slot.originalImage!, slot.originalMimeType); }}><Download size={15} /></button>
-                  <button onClick={(event) => { event.stopPropagation(); onUpdate(slot.id, { originalImage: null, originalMimeType: null, rawAnalysis: null, trace: null, report: null, analysisText: '', currentPrompt: '', generatedImage: null, savedHistoryId: null }); }}><X size={15} /></button>
+                  <button title="원본 크게 보기" aria-label="원본 크게 보기" onClick={(event) => { event.stopPropagation(); onOpenModal({ base64: slot.originalImage!, mimeType: slot.originalMimeType || 'image/png' }); }}><Expand size={15} /></button>
+                  <button title="원본 다운로드" aria-label="원본 다운로드" onClick={(event) => { event.stopPropagation(); download(slot.originalImage!, slot.originalMimeType); }}><Download size={15} /></button>
+                  <button title="원본 제거" aria-label="원본 제거" onClick={(event) => {
+                    event.stopPropagation();
+                    if (inputRef.current) inputRef.current.value = '';
+                    onUpdate(slot.id, {
+                      originalImage: null,
+                      originalMimeType: null,
+                      rawAnalysis: null,
+                      trace: null,
+                      report: null,
+                      analysisText: '',
+                      currentPrompt: '',
+                      generatedImage: null,
+                      generatedMimeType: null,
+                      savedHistoryId: null,
+                      status: 'idle',
+                      error: null,
+                    });
+                  }}><X size={15} /></button>
                 </div>
               </>
             ) : (
@@ -271,7 +273,17 @@ export function WorkspaceSlot({
                 <small>붙여넣기 지원 · 원본 MIME 유지</small>
               </div>
             )}
-            <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => event.target.files?.[0] && void useFile(event.target.files[0])} />
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              disabled={busy}
+              onChange={(event) => {
+                const file = takeSelectedFile(event.currentTarget);
+                if (file) void useFile(file);
+              }}
+            />
           </div>
 
           {slot.trace && (
@@ -328,7 +340,7 @@ export function WorkspaceSlot({
               {copied === 'prompt' ? <Check size={14} /> : <Copy size={14} />}
               {copied === 'prompt' ? '복사됨' : '프롬프트 복사'}
             </button>
-            <button className="text-action" disabled={!slot.rawAnalysis || busy} onClick={() => void onSave(slot, slot.generatedImage ? 'edit' : 'analysis')}>
+            <button className="text-action" disabled={!slot.rawAnalysis || busy} onClick={() => void saveCurrent()}>
               <Save size={14} /> 저장
             </button>
           </div>
@@ -343,8 +355,8 @@ export function WorkspaceSlot({
               <>
                 <img src={dataUrl(slot.generatedImage, slot.generatedMimeType)} alt="생성 결과" />
                 <div className="image-actions">
-                  <button onClick={() => onOpenModal({ base64: slot.generatedImage!, mimeType: slot.generatedMimeType || 'image/jpeg', prompt: slot.currentPrompt })}><Expand size={15} /></button>
-                  <button onClick={() => download(slot.generatedImage!, slot.generatedMimeType)}><Download size={15} /></button>
+                  <button title="생성 이미지 크게 보기" aria-label="생성 이미지 크게 보기" onClick={() => onOpenModal({ base64: slot.generatedImage!, mimeType: slot.generatedMimeType || 'image/jpeg', prompt: slot.currentPrompt })}><Expand size={15} /></button>
+                  <button title="생성 이미지 다운로드" aria-label="생성 이미지 다운로드" onClick={() => download(slot.generatedImage!, slot.generatedMimeType)}><Download size={15} /></button>
                 </div>
               </>
             ) : (
@@ -354,49 +366,7 @@ export function WorkspaceSlot({
         </section>
       </div>
 
-      {slot.report && (
-        <details className={`analysis-report ${slot.report.outcome !== 'completed' ? 'report-failed' : ''}`}>
-          <summary>
-            <span><FileText size={15} /> 분석 실행 리포트</span>
-            <span className="report-summary">
-              <b>{slot.report.requestedModel}</b>
-              <i>{agenticLabel[slot.report.agenticVisionStatus]}</i>
-              <i>{slot.report.inspections.length}회 정밀검사</i>
-              <i>{formatUsd(slot.report.cost.totalUsd)}</i>
-              <i>{(slot.report.totalDurationMs / 1000).toFixed(2)}s</i>
-            </span>
-          </summary>
-          <div className="report-body">
-            <div className="report-metrics">
-              <span><small>실행 결과</small><b>{slot.report.outcome}</b></span>
-              <span><small>선택 / 실행 모델</small><b>{slot.report.requestedModel}<br />{slot.report.resolvedModels.join(', ') || '응답 없음'}</b></span>
-              <span><small>Agentic Vision 직접 귀속 추정</small><b>{formatUsd(slot.report.cost.agenticAttributedUsd)}</b></span>
-              <span><small>토큰 / 시간</small><b>{slot.report.usage.totalTokens.toLocaleString()} / {(slot.report.totalDurationMs / 1000).toFixed(2)}s</b></span>
-            </div>
-            {slot.report.failure && (
-              <div className="report-failure">
-                <b>{slot.report.failure.stage} 단계에서 중단됨</b>
-                <span>{slot.report.failure.reason}</span>
-              </div>
-            )}
-            {slot.report.inspections.length > 0 && (
-              <div className="inspection-grid">
-                {slot.report.inspections.map((inspection) => (
-                  <div key={`${inspection.index}-${inspection.area}`}>
-                    <b>검사 {inspection.index} · {inspection.area}</b>
-                    <span>{inspection.purpose}</span>
-                    <small>{inspection.resultExcerpt || '텍스트 결과 없음'}</small>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button className="secondary-button report-download" onClick={downloadReport}>
-              <Download size={14} /> 리포트 .md 저장
-            </button>
-            <pre>{formatAnalysisReport(slot.report)}</pre>
-          </div>
-        </details>
-      )}
+      {slot.report && <AnalysisReportView report={slot.report} />}
 
       {busy && (
         <div className="busy-overlay">
@@ -404,7 +374,12 @@ export function WorkspaceSlot({
           <span>{slot.status === 'analyzing' ? '이미지 분석 중' : slot.status === 'generating' ? '이미지 생성 중' : '히스토리에 저장 중'}</span>
         </div>
       )}
-      {slot.error && <div className="error-banner">{slot.error}</div>}
+      {slot.error && (
+        <div className="error-banner">
+          <span>{slot.error}</span>
+          <button aria-label="오류 닫기" onClick={() => onUpdate(slot.id, { error: null, status: 'idle' })}><X size={15} /></button>
+        </div>
+      )}
     </article>
   );
 }

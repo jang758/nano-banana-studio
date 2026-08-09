@@ -1,21 +1,42 @@
-import { useMemo, useRef, useState } from 'react';
-import { Columns2, Eye, EyeOff, ImagePlus, LoaderCircle, RefreshCw, Sparkles } from 'lucide-react';
-import { FALLBACK_MODELS } from './constants';
-import { analyzeImage, listAvailableModels } from './services/geminiService';
-import type { AnalysisOutput, ModelOption } from './types';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { CheckCircle2, Columns2, Download, Eye, EyeOff, ImagePlus, LoaderCircle, RefreshCw, Sparkles, X } from 'lucide-react';
+import { runComparisonSide } from './services/comparisonService';
+import type {
+  AppSettings,
+  CompareSession,
+  CompareSideState,
+  ModelOption,
+  StudioView,
+} from './types';
 import { formatAnalysis } from './utils/analysisFormat';
-import { formatUsd } from './utils/analysisReport';
+import { formatAnalysisReport, formatUsd } from './utils/analysisReport';
+import { getClipboardImage, readImageFile, takeSelectedFile } from './utils/imageInput';
+import { createCompareSideState } from './utils/studioState';
+import { AnalysisReportView } from './components/AnalysisReportView';
 
-function mergeModels(live: ModelOption[]) {
-  const merged = new Map(FALLBACK_MODELS.map((model) => [model.id, model]));
-  live.forEach((model) => merged.set(model.id, model));
-  return [...merged.values()].filter((model) => model.task === 'analysis' && model.selectable);
+interface Props {
+  view: StudioView;
+  onNavigate: (view: StudioView) => void;
+  apiKey: string;
+  onApiKeyChange: (key: string) => void;
+  settings: AppSettings;
+  onSettingsChange: (settings: AppSettings) => void;
+  models: ModelOption[];
+  modelRefreshState: 'idle' | 'loading' | 'error';
+  onRefreshModels: () => Promise<number>;
+  session: CompareSession;
+  onSessionChange: Dispatch<SetStateAction<CompareSession>>;
 }
 
-function ResultCard({ title, subtitle, output }: { title: string; subtitle: string; output: AnalysisOutput | null }) {
+function ResultCard({ title, subtitle, state }: { title: string; subtitle: string; state: CompareSideState }) {
+  const { output, report, error, historyId, saveError } = state;
   return (
     <section className="compare-result">
-      <div className="compare-result-head"><div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div>{output && <b>{(output.trace.totalDurationMs / 1000).toFixed(1)}s</b>}</div>
+      <div className="compare-result-head">
+        <div><p className="eyebrow">{subtitle}</p><h2>{title}</h2></div>
+        {report && <b>{(report.totalDurationMs / 1000).toFixed(1)}s</b>}
+      </div>
+
       {output ? (
         <>
           <div className="compare-trace">
@@ -25,70 +46,147 @@ function ResultCard({ title, subtitle, output }: { title: string; subtitle: stri
             <span>{formatUsd(output.report.cost.totalUsd)}</span>
             {output.trace.stages.map((stage) => <span key={stage.name}>{stage.name} {(stage.durationMs / 1000).toFixed(1)}s</span>)}
           </div>
+          {historyId && <div className="compare-save-state"><CheckCircle2 size={15} /> 히스토리에 저장됨</div>}
+          {saveError && <div className="compare-side-error">분석은 완료됐지만 히스토리 저장 실패: {saveError}</div>}
           <h3>생성 프롬프트</h3>
           <textarea className="compare-prompt" readOnly value={output.result.prompt_en} />
           <h3>분석 사양</h3>
           <textarea className="compare-analysis" readOnly value={formatAnalysis(output.result, 'ko')} />
         </>
-      ) : <div className="compare-empty">비교 분석을 실행하면 결과가 표시됩니다.</div>}
+      ) : error ? (
+        <div className="compare-side-error">{error}</div>
+      ) : (
+        <div className="compare-empty">비교 분석을 실행하면 결과가 표시됩니다.</div>
+      )}
+
+      {report && <AnalysisReportView report={report} />}
     </section>
   );
 }
 
-export default function CompareApp() {
+export default function CompareApp({
+  view,
+  onNavigate,
+  apiKey,
+  onApiKeyChange,
+  settings,
+  onSettingsChange,
+  models,
+  modelRefreshState,
+  onRefreshModels,
+  session,
+  onSessionChange,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState('gemini-pro-latest');
-  const [models, setModels] = useState<ModelOption[]>(mergeModels([]));
-  const [agenticVision, setAgenticVision] = useState(false);
-  const [image, setImage] = useState<{ base64: string; mimeType: string; url: string } | null>(null);
-  const [standard, setStandard] = useState<AnalysisOutput | null>(null);
-  const [harness, setHarness] = useState<AnalysisOutput | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const modelLabel = useMemo(() => models.find((item) => item.id === model)?.displayName || model, [model, models]);
+  const [dragging, setDragging] = useState(false);
+  const analysisModels = useMemo(
+    () => models.filter((model) => model.task === 'analysis' && model.selectable),
+    [models],
+  );
+  const modelLabel = analysisModels.find((item) => item.id === settings.analysisModel)?.displayName || settings.analysisModel;
 
-  const useFile = async (file: File) => {
-    if (image) URL.revokeObjectURL(image.url);
-    const base64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-    setImage({ base64, mimeType: file.type || 'image/png', url: URL.createObjectURL(file) });
-    setStandard(null);
-    setHarness(null);
+  const changeAnalysisSettings = (nextSettings: AppSettings) => {
+    onSettingsChange(nextSettings);
+    onSessionChange((current) => ({
+      ...current,
+      standard: createCompareSideState(),
+      harness: createCompareSideState(),
+      error: null,
+    }));
   };
 
-  const run = async () => {
-    if (!image) return;
-    setBusy(true);
-    setError('');
-    setStandard(null);
-    setHarness(null);
+  const useFile = async (file: File) => {
     try {
-      // 동일 이미지·모델·Agentic 설정으로 실행해 분석 방식만 비교한다.
-      const common = { apiKey, base64: image.base64, mimeType: image.mimeType, model, agenticVision };
-      const [standardOutput, harnessOutput] = await Promise.all([
-        analyzeImage({ ...common, pipeline: 'standard' }),
-        analyzeImage({ ...common, pipeline: 'harness' }),
-      ]);
-      setStandard(standardOutput);
-      setHarness(harnessOutput);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '비교 분석에 실패했습니다.');
-    } finally {
-      setBusy(false);
+      const image = await readImageFile(file);
+      onSessionChange({
+        image,
+        standard: createCompareSideState(),
+        harness: createCompareSideState(),
+        error: null,
+      });
+    } catch (error) {
+      onSessionChange((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : '이미지를 읽지 못했습니다.',
+      }));
     }
+  };
+
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (busy || !event.clipboardData) return;
+      const file = getClipboardImage(event.clipboardData);
+      if (!file) return;
+      event.preventDefault();
+      void useFile(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
+
+  const run = async () => {
+    if (!session.image || busy) return;
+    setBusy(true);
+    onSessionChange((current) => ({
+      ...current,
+      standard: createCompareSideState(),
+      harness: createCompareSideState(),
+      error: null,
+    }));
+    const common = {
+      apiKey,
+      base64: session.image.base64,
+      mimeType: session.image.mimeType,
+      settings,
+    };
+    const [standard, harness] = await Promise.all([
+      runComparisonSide({ ...common, pipeline: 'standard' }),
+      runComparisonSide({ ...common, pipeline: 'harness' }),
+    ]);
+    onSessionChange((current) => ({ ...current, standard, harness }));
+    setBusy(false);
+  };
+
+  const downloadComparisonReport = () => {
+    const sections = [
+      session.standard.report ? `# 기존 분석 유지\n\n${formatAnalysisReport(session.standard.report)}` : '',
+      session.harness.report ? `# 새 분석 하네스\n\n${formatAnalysisReport(session.harness.report)}` : '',
+    ].filter(Boolean);
+    if (!sections.length) return;
+    const url = URL.createObjectURL(new Blob([
+      `# Nano Banana Studio A/B 비교 리포트\n\n- 분석 모델: ${settings.analysisModel}\n- Agentic Vision 선택: ${settings.agenticVision ? '예' : '아니오'}\n\n${sections.join('\n\n---\n\n')}`,
+    ], { type: 'text/markdown;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `nano-banana-comparison-${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="compare-page">
       <header className="compare-header">
-        <a href="/" className="flex items-center gap-3"><span className="brand-mark"><Sparkles size={18} /></span><b>Nano Banana Studio</b></a>
-        <nav><a href="/">기존 분석</a><a href="/harness.html">새 하네스</a><a className="active" href="/compare.html"><Columns2 size={14} /> 비교</a></nav>
+        <button className="brand-button flex items-center gap-3" disabled={busy} onClick={() => onNavigate('standard')}>
+          <span className="brand-mark"><Sparkles size={18} /></span><b>Nano Banana Studio</b>
+        </button>
+        <nav className="compare-nav-desktop">
+          <button disabled={busy} onClick={() => onNavigate('standard')}>기존 분석</button>
+          <button disabled={busy} onClick={() => onNavigate('harness')}>새 하네스</button>
+          <button disabled={busy} className="active" onClick={() => onNavigate('compare')}><Columns2 size={15} /> 비교</button>
+        </nav>
+        <select
+          className="compare-view-switch"
+          aria-label="분석 화면 선택"
+          value={view}
+          disabled={busy}
+          onChange={(event) => onNavigate(event.target.value as StudioView)}
+        >
+          <option value="standard">기존 분석</option>
+          <option value="harness">새 하네스</option>
+          <option value="compare">비교</option>
+        </select>
       </header>
 
       <main className="compare-main">
@@ -100,32 +198,88 @@ export default function CompareApp() {
 
         <section className="compare-controls">
           <div className="key-input-wrap">
-            <input type={showKey ? 'text' : 'password'} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Gemini API 키 · 메모리에만 유지" autoComplete="off" />
-            <button onClick={() => setShowKey((value) => !value)}>{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+            <input type={showKey ? 'text' : 'password'} value={apiKey} onChange={(event) => onApiKeyChange(event.target.value)} placeholder="Gemini API 키 · 앱을 닫을 때까지 유지" autoComplete="off" spellCheck={false} />
+            <button aria-label="API 키 표시 전환" onClick={() => setShowKey((value) => !value)}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button>
           </div>
-          <select value={model} onChange={(event) => setModel(event.target.value)} title={modelLabel}>
-            {models.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.id}</option>)}
+          <select value={settings.analysisModel} onChange={(event) => changeAnalysisSettings({ ...settings, analysisModel: event.target.value })} title={modelLabel} aria-label="비교 분석 모델">
+            {analysisModels.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.id}</option>)}
           </select>
-          <button className="secondary-button" disabled={!apiKey.trim()} onClick={async () => {
-            try { setModels(mergeModels(await listAvailableModels(apiKey))); } catch (caught) { setError(caught instanceof Error ? caught.message : '모델 목록 오류'); }
-          }}><RefreshCw size={14} /> 모델 갱신</button>
-          <label className="compare-check"><input type="checkbox" checked={agenticVision} onChange={(event) => setAgenticVision(event.target.checked)} /> 코드 기반 정밀검사 허용</label>
+          <button className="secondary-button" disabled={!apiKey.trim() || modelRefreshState === 'loading' || busy} onClick={() => {
+            onSessionChange((current) => ({ ...current, error: null }));
+            void onRefreshModels().catch((error) => onSessionChange((current) => ({
+              ...current,
+              error: error instanceof Error ? error.message : '모델 목록을 불러오지 못했습니다.',
+            })));
+          }}>
+            {modelRefreshState === 'loading' ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} 모델 갱신
+          </button>
+          <label className="compare-check"><input type="checkbox" checked={settings.agenticVision} onChange={(event) => changeAnalysisSettings({ ...settings, agenticVision: event.target.checked })} /> 코드 기반 정밀검사 허용</label>
         </section>
 
-        <section className="compare-source">
-          <button className="compare-upload" onClick={() => inputRef.current?.click()}>
-            {image ? <img src={image.url} alt="비교 원본" /> : <><ImagePlus size={25} /><b>비교할 이미지 선택</b></>}
-          </button>
-          <input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && void useFile(event.target.files[0])} />
-          <button className="primary-button compare-run" disabled={!image || !apiKey.trim() || busy} onClick={() => void run()}>
-            {busy ? <LoaderCircle className="animate-spin" size={17} /> : <Columns2 size={17} />}
+        <section
+          className={`compare-source ${dragging ? 'dragging' : ''}`}
+          onDragOver={(event) => { event.preventDefault(); if (!busy) setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            if (busy) return;
+            const file = event.dataTransfer.files[0];
+            if (file) void useFile(file);
+          }}
+        >
+          <div className="compare-upload-wrap">
+            <button className="compare-upload" disabled={busy} onClick={() => inputRef.current?.click()}>
+              {session.image
+                ? <img src={`data:${session.image.mimeType};base64,${session.image.base64}`} alt="비교 원본" />
+                : <><ImagePlus size={28} /><b>이미지 선택</b><small>클릭 · 붙여넣기 · 드래그</small></>}
+            </button>
+            {session.image && (
+              <button
+                className="compare-remove"
+                disabled={busy}
+                aria-label="비교 이미지 제거"
+                title="비교 이미지 제거"
+                onClick={() => {
+                  if (inputRef.current) inputRef.current.value = '';
+                  onSessionChange({ ...session, image: null, standard: createCompareSideState(), harness: createCompareSideState(), error: null });
+                }}
+              ><X size={16} /></button>
+            )}
+          </div>
+          <input
+            ref={inputRef}
+            hidden
+            type="file"
+            accept="image/*"
+            disabled={busy}
+            onChange={(event) => {
+              const file = takeSelectedFile(event.currentTarget);
+              if (file) void useFile(file);
+            }}
+          />
+          <button className="primary-button compare-run" disabled={!session.image || !apiKey.trim() || busy} onClick={() => void run()}>
+            {busy ? <LoaderCircle className="animate-spin" size={18} /> : <Columns2 size={18} />}
             {busy ? '두 분석을 실행 중' : '동일 조건 A/B 분석 실행'}
           </button>
         </section>
-        {error && <div className="error-banner static-error">{error}</div>}
+
+        {session.error && (
+          <div className="error-banner static-error">
+            <span>{session.error}</span>
+            <button aria-label="오류 닫기" onClick={() => onSessionChange((current) => ({ ...current, error: null }))}><X size={15} /></button>
+          </div>
+        )}
+
+        {(session.standard.report || session.harness.report) && (
+          <button className="secondary-button compare-report-download" onClick={downloadComparisonReport}>
+            <Download size={15} /> 비교 리포트 .md 저장
+          </button>
+        )}
+
         <div className="compare-grid">
-          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" output={standard} />
-          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" output={harness} />
+          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} />
+          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} />
         </div>
       </main>
     </div>
