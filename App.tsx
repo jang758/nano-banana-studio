@@ -57,7 +57,8 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [models, setModels] = useState<ModelOption[]>(FALLBACK_MODELS);
   const [modelRefreshState, setModelRefreshState] = useState<'idle' | 'loading' | 'error'>('idle');
-  const [slots, setSlots] = useState<WorkspaceSlotType[]>([newSlot()]);
+  const [slots, setSlots] = useState<WorkspaceSlotType[]>(() => [newSlot()]);
+  const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryMetadata[]>([]);
   const [nextBefore, setNextBefore] = useState<number | undefined>();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -66,6 +67,9 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
   const [notice, setNotice] = useState('');
 
   const modeLabel = pipeline === 'standard' ? '기존 분석 유지' : '새 분석 하네스';
+  const pasteTargetId = activeSlotId && slots.some((slot) => slot.id === activeSlotId)
+    ? activeSlotId
+    : (slots.find((slot) => slot.status === 'idle' && !slot.originalImage)?.id ?? slots[0]?.id ?? null);
 
   const loadFirstHistoryPage = useCallback(async () => {
     const page = await getHistoryPage();
@@ -234,6 +238,8 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
                 settings={settings}
                 pipeline={pipeline}
                 apiKey={apiKey}
+                isPasteTarget={slot.id === pasteTargetId}
+                onActivate={() => setActiveSlotId(slot.id)}
                 onUpdate={updateSlot}
                 onSave={saveSlot}
                 onOpenModal={setModalData}
@@ -242,7 +248,11 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
             ))}
           </div>
 
-          <button className="add-workspace" onClick={() => setSlots((current) => [...current, newSlot()])}>
+          <button className="add-workspace" onClick={() => {
+            const slot = newSlot();
+            setSlots((current) => [...current, slot]);
+            setActiveSlotId(slot.id);
+          }}>
             <Plus size={19} /> 새 작업 공간 추가
           </button>
         </main>

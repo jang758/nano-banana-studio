@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Check,
   Copy,
@@ -17,6 +17,7 @@ import { AnalysisRunError, analyzeImage, generateImageFromPrompt } from '../serv
 import type { AnalysisPipeline, AppSettings, ModalData, WorkspaceSlot as Slot } from '../types';
 import { formatAnalysis } from '../utils/analysisFormat';
 import { formatAnalysisReport, formatUsd } from '../utils/analysisReport';
+import { getClipboardImage } from '../utils/imageInput';
 
 interface Props {
   slot: Slot;
@@ -24,6 +25,8 @@ interface Props {
   settings: AppSettings;
   pipeline: AnalysisPipeline;
   apiKey: string;
+  isPasteTarget: boolean;
+  onActivate: () => void;
   onUpdate: (id: string, updates: Partial<Slot>) => void;
   onSave: (slot: Slot, type: 'analysis' | 'generation' | 'edit') => Promise<string>;
   onOpenModal: (data: ModalData) => void;
@@ -46,6 +49,8 @@ export function WorkspaceSlot({
   settings,
   pipeline,
   apiKey,
+  isPasteTarget,
+  onActivate,
   onUpdate,
   onSave,
   onOpenModal,
@@ -100,14 +105,49 @@ export function WorkspaceSlot({
       onUpdate(slot.id, { status: 'error', error: '이미지 파일만 사용할 수 있습니다.' });
       return;
     }
-    const base64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-    await runAnalysis(base64, file.type || 'image/png');
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const mimeType = file.type || 'image/png';
+      onUpdate(slot.id, {
+        originalImage: base64,
+        originalMimeType: mimeType,
+        generatedImage: null,
+        generatedMimeType: null,
+        rawAnalysis: null,
+        trace: null,
+        report: null,
+        analysisText: '',
+        currentPrompt: '',
+        savedHistoryId: null,
+        status: 'analyzing',
+        error: null,
+      });
+      await runAnalysis(base64, mimeType);
+    } catch (error) {
+      onUpdate(slot.id, {
+        status: 'error',
+        error: error instanceof Error ? error.message : '이미지를 읽지 못했습니다.',
+      });
+    }
   };
+
+  useEffect(() => {
+    if (!isPasteTarget) return;
+    const handlePaste = (event: ClipboardEvent) => {
+      if (busy || !event.clipboardData) return;
+      const file = getClipboardImage(event.clipboardData);
+      if (!file) return;
+      event.preventDefault();
+      void useFile(file);
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  });
 
   const switchAnalysisLanguage = (language: 'en' | 'ko') => {
     if (!slot.rawAnalysis) return;
@@ -171,16 +211,15 @@ export function WorkspaceSlot({
   return (
     <article
       className={`workspace-card ${dragging ? 'dragging' : ''}`}
+      data-workspace-id={slot.id}
+      onPointerDown={onActivate}
+      onFocusCapture={onActivate}
       onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(event) => {
         event.preventDefault();
         setDragging(false);
         const file = event.dataTransfer.files[0];
-        if (file) void useFile(file);
-      }}
-      onPaste={(event) => {
-        const file = [...event.clipboardData.items].find((item) => item.type.startsWith('image/'))?.getAsFile();
         if (file) void useFile(file);
       }}
     >
