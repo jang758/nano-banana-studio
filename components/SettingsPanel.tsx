@@ -1,139 +1,149 @@
-import React from 'react';
-import { AppSettings, ModelType, AspectRatio, ImageSize } from '../types';
-import { Settings, Zap } from 'lucide-react';
-import { openApiKeySelection } from '../services/geminiService';
+import { useMemo, useState } from 'react';
+import { CheckCircle2, Eye, EyeOff, KeyRound, LoaderCircle, RefreshCw, Settings2, X } from 'lucide-react';
+import type { AppSettings, AspectRatio, ImageSize, ModelOption } from '../types';
 
-interface SettingsPanelProps {
-  settings: AppSettings;
-  setSettings: (s: AppSettings) => void;
+interface Props {
   isOpen: boolean;
-  setIsOpen: (open: boolean) => void;
+  onClose: () => void;
+  settings: AppSettings;
+  onSettingsChange: (settings: AppSettings) => void;
+  apiKey: string;
+  onApiKeyChange: (key: string) => void;
+  models: ModelOption[];
+  modelRefreshState: 'idle' | 'loading' | 'error';
+  onRefreshModels: () => void;
 }
+const ratios: AspectRatio[] = ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'];
+const sizes: ImageSize[] = ['1K', '2K', '4K'];
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({
-  settings,
-  setSettings,
+export function SettingsPanel({
   isOpen,
-  setIsOpen
-}) => {
-  const handleChange = (key: keyof AppSettings, value: any) => {
-    setSettings({ ...settings, [key]: value });
-  };
+  onClose,
+  settings,
+  onSettingsChange,
+  apiKey,
+  onApiKeyChange,
+  models,
+  modelRefreshState,
+  onRefreshModels,
+}: Props) {
+  const [showKey, setShowKey] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const analysisModels = useMemo(() => models.filter((model) => model.task === 'analysis' && model.selectable), [models]);
+  const imageModels = useMemo(() => models.filter((model) => model.task === 'image' && model.selectable), [models]);
+  const specializedModels = useMemo(() => models.filter((model) => model.task === 'specialized' || !model.selectable), [models]);
 
-  const handleModelChange = async (model: ModelType) => {
-    if (model === ModelType.NANO_BANANA_PRO) {
-       // Trigger key selection flow immediately upon selection if possible, 
-       // but actual check happens at generation time. 
-       // We can give a visual cue here.
-       try {
-         await openApiKeySelection();
-       } catch (e) {
-         console.error("Key selection skipped or failed", e);
-       }
-    }
-    handleChange('model', model);
+  const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+    onSettingsChange({ ...settings, [key]: value });
   };
 
   return (
-    <div className={`fixed lg:static inset-y-0 right-0 z-40 w-80 bg-zinc-900 border-l border-zinc-800 transform transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
-       <div className="flex flex-col h-full">
-         <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
-            <h2 className="text-xl font-bold text-yellow-400 flex items-center gap-2">
-              <Settings size={20} />
-              Configuration
-            </h2>
-            <button onClick={() => setIsOpen(false)} className="lg:hidden text-zinc-400">
-               <Zap size={20} />
+    <>
+      {isOpen && <button className="drawer-backdrop" onClick={onClose} aria-label="설정 닫기" />}
+      <aside className={`settings-drawer ${isOpen ? 'open' : ''}`}>
+        <div className="drawer-header">
+          <div>
+            <p className="eyebrow">RUNTIME CONFIG</p>
+            <h2><Settings2 size={18} /> 분석 및 생성 설정</h2>
+          </div>
+          <button className="icon-button" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="drawer-body">
+          <section className="settings-section">
+            <div className="settings-label"><KeyRound size={15} /> Gemini API 키</div>
+            <div className="key-input-wrap">
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={apiKey}
+                onChange={(event) => onApiKeyChange(event.target.value)}
+                placeholder="AIza..."
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button onClick={() => setShowKey((value) => !value)} aria-label="API 키 표시 전환">
+                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <p className="settings-help">키는 이 탭의 메모리에만 있으며 저장·히스토리·내보내기에 포함되지 않습니다.</p>
+            <button className="secondary-button w-full" disabled={!apiKey.trim() || modelRefreshState === 'loading'} onClick={onRefreshModels}>
+              {modelRefreshState === 'loading' ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />}
+              API 모델 전체 새로고침
             </button>
-         </div>
+          </section>
 
-         <div className="p-6 space-y-6 flex-1 overflow-y-auto">
-           
-           {/* Model Selection */}
-           <div className="space-y-3">
-             <label className="text-sm font-medium text-zinc-400">AI Model</label>
-             <div className="grid grid-cols-1 gap-2">
-               <button
-                 onClick={() => handleModelChange(ModelType.NANO_BANANA)}
-                 className={`p-3 rounded-lg border text-left transition-all ${settings.model === ModelType.NANO_BANANA ? 'bg-yellow-500/10 border-yellow-500 text-yellow-400' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-600'}`}
-               >
-                 <div className="font-bold">Nano Banana</div>
-                 <div className="text-xs opacity-70">Gemini 2.5 Flash Image - Fast & Efficient</div>
-               </button>
-               <button
-                 onClick={() => handleModelChange(ModelType.NANO_BANANA_PRO)}
-                 className={`p-3 rounded-lg border text-left transition-all ${settings.model === ModelType.NANO_BANANA_PRO ? 'bg-purple-500/10 border-purple-500 text-purple-400' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-600'}`}
-               >
-                 <div className="font-bold">Nano Banana Pro</div>
-                 <div className="text-xs opacity-70">Gemini 3 Pro Image - High Fidelity (Paid Key)</div>
-               </button>
-             </div>
-             {settings.model === ModelType.NANO_BANANA_PRO && (
-               <div className="text-xs text-purple-400 bg-purple-500/10 p-2 rounded">
-                 * Requires selecting a paid project API key.
-               </div>
-             )}
-           </div>
+          <section className="settings-section">
+            <label className="settings-label" htmlFor="analysis-model">분석 모델</label>
+            <select id="analysis-model" value={settings.analysisModel} onChange={(event) => update('analysisModel', event.target.value)}>
+              {analysisModels.map((model) => <option value={model.id} key={model.id}>{model.displayName} · {model.id}</option>)}
+            </select>
+            <p className="settings-help">기본값은 요청하신 <code>gemini-pro-latest</code>입니다.</p>
+          </section>
 
-           {/* Aspect Ratio */}
-           <div className="space-y-3">
-             <label className="text-sm font-medium text-zinc-400">Aspect Ratio</label>
-             <div className="grid grid-cols-3 gap-2">
-               {['1:1', '3:4', '4:3', '9:16', '16:9'].map((ratio) => (
-                 <button
-                   key={ratio}
-                   onClick={() => handleChange('aspectRatio', ratio)}
-                   className={`py-2 px-3 text-sm rounded-md transition-all ${settings.aspectRatio === ratio ? 'bg-zinc-100 text-zinc-900 font-bold' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
-                 >
-                   {ratio}
-                 </button>
-               ))}
-             </div>
-           </div>
+          <section className="settings-section agentic-setting">
+            <label className="toggle-row">
+              <span>
+                <strong>코드 기반 정밀검사 허용</strong>
+                <small>필요할 때만 모델이 확대·좌표·픽셀 검사를 선택합니다.</small>
+              </span>
+              <input type="checkbox" checked={settings.agenticVision} onChange={(event) => update('agenticVision', event.target.checked)} />
+              <i aria-hidden="true" />
+            </label>
+            <p className="settings-help">꺼져 있어도 기존 분석과 새 하네스 모두 정상 동작합니다. 비교 기본값은 꺼짐입니다.</p>
+          </section>
 
-           {/* Image Size (Pro Only) */}
-           <div className="space-y-3">
-             <div className="flex justify-between">
-                <label className="text-sm font-medium text-zinc-400">Image Resolution</label>
-                {settings.model !== ModelType.NANO_BANANA_PRO && <span className="text-xs text-zinc-600">Pro Only</span>}
-             </div>
-             <div className="grid grid-cols-3 gap-2">
-               {(['1K', '2K', '4K'] as ImageSize[]).map((size) => (
-                 <button
-                   key={size}
-                   disabled={settings.model !== ModelType.NANO_BANANA_PRO}
-                   onClick={() => handleChange('imageSize', size)}
-                   className={`py-2 px-3 text-sm rounded-md transition-all ${settings.imageSize === size && settings.model === ModelType.NANO_BANANA_PRO ? 'bg-zinc-100 text-zinc-900 font-bold' : 'bg-zinc-800 text-zinc-400 border border-transparent'} ${settings.model !== ModelType.NANO_BANANA_PRO ? 'opacity-30 cursor-not-allowed' : 'hover:bg-zinc-700'}`}
-                 >
-                   {size}
-                 </button>
-               ))}
-             </div>
-           </div>
+          <section className="settings-section">
+            <label className="settings-label" htmlFor="generation-model">이미지 생성 모델</label>
+            <select id="generation-model" value={settings.generationModel} onChange={(event) => update('generationModel', event.target.value)}>
+              {imageModels.map((model) => <option value={model.id} key={model.id}>{model.displayName} · {model.id}</option>)}
+            </select>
+          </section>
 
-           {/* Temperature */}
-           <div className="space-y-3">
-             <label className="text-sm font-medium text-zinc-400 flex justify-between">
-                <span>Creativity (Temperature)</span>
-                <span>{settings.temperature}</span>
-             </label>
-             <input
-               type="range"
-               min="0"
-               max="2"
-               step="0.1"
-               value={settings.temperature}
-               onChange={(e) => handleChange('temperature', parseFloat(e.target.value))}
-               className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-yellow-500"
-             />
-             <div className="flex justify-between text-xs text-zinc-600">
-               <span>Precise</span>
-               <span>Creative</span>
-             </div>
-           </div>
+          <section className="settings-section">
+            <div className="settings-label">화면 비율</div>
+            <div className="choice-grid ratio-grid">
+              {ratios.map((ratio) => (
+                <button className={settings.aspectRatio === ratio ? 'active' : ''} key={ratio} onClick={() => update('aspectRatio', ratio)}>{ratio}</button>
+              ))}
+            </div>
+          </section>
 
-         </div>
-       </div>
-    </div>
+          <section className="settings-section">
+            <div className="settings-label">생성 해상도</div>
+            <div className="choice-grid">
+              {sizes.map((size) => (
+                <button className={settings.imageSize === size ? 'active' : ''} key={size} onClick={() => update('imageSize', size)}>{size}</button>
+              ))}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <button className="catalog-toggle" onClick={() => setCatalogOpen((value) => !value)}>
+              <span>전체 모델 카탈로그</span><b>{models.length}</b>
+            </button>
+            {catalogOpen && (
+              <div className="model-catalog">
+                {(['analysis', 'image'] as const).map((task) => (
+                  <div key={task}>
+                    <h3>{task === 'analysis' ? '분석 선택 가능' : '이미지 생성 선택 가능'}</h3>
+                    {models.filter((model) => model.task === task && model.selectable).map((model) => (
+                      <div className="catalog-row" key={model.id}><CheckCircle2 size={13} /><span><b>{model.displayName}</b><small>{model.id}</small></span></div>
+                    ))}
+                  </div>
+                ))}
+                {specializedModels.length > 0 && (
+                  <div>
+                    <h3>전용 모델 · 현재 작업에는 비활성</h3>
+                    {specializedModels.map((model) => (
+                      <div className="catalog-row disabled" key={model.id}><span className="catalog-dot" /><span><b>{model.displayName}</b><small>{model.id}</small></span></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
+    </>
   );
-};
+}

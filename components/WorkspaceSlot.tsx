@@ -1,361 +1,368 @@
+import { useRef, useState } from 'react';
+import {
+  Check,
+  Copy,
+  Download,
+  Expand,
+  FileText,
+  ImagePlus,
+  LoaderCircle,
+  RefreshCw,
+  Save,
+  Trash2,
+  WandSparkles,
+  X,
+} from 'lucide-react';
+import { AnalysisRunError, analyzeImage, generateImageFromPrompt } from '../services/geminiService';
+import type { AnalysisPipeline, AppSettings, ModalData, WorkspaceSlot as Slot } from '../types';
+import { formatAnalysis } from '../utils/analysisFormat';
+import { formatAnalysisReport, formatUsd } from '../utils/analysisReport';
 
-import React, { useRef, useState, useEffect } from 'react';
-import { WorkspaceSlot as IWorkspaceSlot, AppSettings, AnalysisResult, ModalData } from '../types';
-import { Upload, X, Wand2, Copy, Download, Loader2, Maximize2, Trash2, RefreshCw } from 'lucide-react';
-import { analyzeImage, generateImageFromPrompt } from '../services/geminiService';
-
-interface WorkspaceSlotProps {
-  slot: IWorkspaceSlot;
+interface Props {
+  slot: Slot;
   index: number;
   settings: AppSettings;
-  onUpdate: (id: number, updates: Partial<IWorkspaceSlot>) => void;
-  onSaveToHistory: (slot: IWorkspaceSlot) => void;
+  pipeline: AnalysisPipeline;
+  apiKey: string;
+  onUpdate: (id: string, updates: Partial<Slot>) => void;
+  onSave: (slot: Slot, type: 'analysis' | 'generation' | 'edit') => Promise<string>;
   onOpenModal: (data: ModalData) => void;
-  onDelete: (id: number) => void;
+  onDelete: (id: string) => void;
 }
 
-export const WorkspaceSlot: React.FC<WorkspaceSlotProps> = ({ 
-  slot, 
-  index, 
-  settings, 
-  onUpdate, 
-  onSaveToHistory,
+const dataUrl = (base64: string, mimeType: string | null) => `data:${mimeType || 'image/png'};base64,${base64}`;
+
+const agenticLabel: Record<string, string> = {
+  DISABLED: '정밀검사 꺼짐',
+  AVAILABLE_NOT_USED: '정밀검사 불필요',
+  USED_OK: '정밀검사 사용 완료',
+  USED_FAILED: '정밀검사 실행 실패',
+  UNSUPPORTED: '모델 미지원',
+};
+
+export function WorkspaceSlot({
+  slot,
+  index,
+  settings,
+  pipeline,
+  apiKey,
+  onUpdate,
+  onSave,
   onOpenModal,
-  onDelete
-}) => {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [dragActive, setDragActive] = useState(false);
+  onDelete,
+}: Props) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [copied, setCopied] = useState<'analysis' | 'prompt' | null>(null);
 
-  const formatAnalysis = (r: AnalysisResult, lang: 'en' | 'ko'): string => {
-    const titles = lang === 'ko' ? {
-      face: "1. 안면 기하학 및 피하 분석 (Face Geometry/Subdermal)",
-      expr: "2. 안면 근육 긴장 및 표정 (Expression Physics)",
-      body: "3. 쓰리사이즈 및 신체 수치 (3-Sizes/Body Metrics)",
-      fashion: "4. 의상 물리 특성 및 소재 (Fashion Physics/Material)",
-      pose: "5. 골격 매핑 및 중심축 (Skeleton/Balance)",
-      skin: "6. 피부 탄력 및 처짐 분석 (Elasticity/Ptosis/SSS)",
-      light: "7. 광학 측정 및 조도 데이터 (Photometric/Luminance)",
-      camera: "8. 카메라 광학 지표 (Camera Optics/EV)",
-      bg: "9. 공간 기하학 (Environment Geometry)",
-      fx: "10. 디지털 후처리 데이터 (Digital LUT/FX)",
-      inter: "11. 인물 상호작용 및 물리 역학 (Interaction Physics)"
-    } : {
-      face: "1. FACE GEOMETRY & SUBDERMAL",
-      expr: "2. EXPRESSION PHYSICS",
-      body: "3. 3-SIZES & BODY METRICS",
-      fashion: "4. FASHION PHYSICS & MATERIAL",
-      pose: "5. SKELETON MAPPING",
-      skin: "6. ELASTICITY & PTOSIS ANALYSIS",
-      light: "7. PHOTOMETRIC & LUMINANCE DATA",
-      camera: "8. CAMERA OPTICS/EV",
-      bg: "9. ENVIRONMENT GEOMETRY",
-      fx: "10. DIGITAL LUT/FX DATA",
-      inter: "11. INTERACTION PHYSICS & DYNAMICS"
-    };
-
-    return `[${titles.face}]
-${lang === 'ko' ? r.face_ko : r.face}
-
-[${titles.expr}]
-${lang === 'ko' ? r.expression_ko : r.expression}
-
-[${titles.body}]
-${lang === 'ko' ? r.body_ko : r.body}
-
-[${titles.pose}]
-${lang === 'ko' ? r.pose_ko : r.pose}
-
-[${titles.inter}]
-${lang === 'ko' ? r.interaction_ko : r.interaction}
-
-[${titles.fashion}]
-${lang === 'ko' ? r.fashion_ko : r.fashion}
-
-[${titles.skin}]
-${lang === 'ko' ? r.skin_ko : r.skin}
-
-[${titles.light}]
-${lang === 'ko' ? r.lighting_ko : r.lighting}
-
-[${titles.camera}]
-${lang === 'ko' ? r.camera_ko : r.camera}
-
-[${titles.bg}]
-${lang === 'ko' ? r.background_ko : r.background}
-
-[${titles.fx}]
-${lang === 'ko' ? r.effects_ko : r.effects}`;
-  };
-
-  const switchAnalysisLang = (lang: 'en' | 'ko') => {
-    if (!slot.rawAnalysis) return;
-    const formatted = formatAnalysis(slot.rawAnalysis, lang);
-    onUpdate(slot.id, { 
-      analysisLang: lang,
-      analysisText: formatted 
-    });
-  };
-
-  const handleFile = async (file: File) => {
-    onUpdate(slot.id, { status: 'analyzing', error: null, originalImage: null, generatedImage: null });
-    
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const base64 = (ev.target?.result as string).split(',')[1];
-      onUpdate(slot.id, { originalImage: base64 });
-      
-      try {
-        const result = await analyzeImage(base64, file.type);
-        const formatted = formatAnalysis(result, 'en');
-        onUpdate(slot.id, { 
-          rawAnalysis: result,
-          analysisText: formatted,
-          analysisLang: 'en',
-          currentPrompt: result.prompt_en,
-          promptLang: 'en',
-          status: 'idle'
-        });
-      } catch (e: any) {
-        onUpdate(slot.id, { status: 'error', error: e.message || "Analysis Failed" });
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleReanalyze = async () => {
-    if (!slot.originalImage || slot.status === 'analyzing') return;
-    
-    onUpdate(slot.id, { status: 'analyzing', error: null });
-    
+  const runAnalysis = async (base64: string, mimeType: string) => {
+    onUpdate(slot.id, { status: 'analyzing', error: null, report: null });
     try {
-      // Since we store only the base64, we default to image/png for re-analysis
-      const result = await analyzeImage(slot.originalImage, 'image/png');
-      const formatted = formatAnalysis(result, slot.analysisLang);
-      onUpdate(slot.id, { 
-        rawAnalysis: result,
-        analysisText: formatted,
-        currentPrompt: slot.promptLang === 'en' ? result.prompt_en : result.prompt_ko,
-        status: 'idle'
+      const output = await analyzeImage({
+        apiKey,
+        base64,
+        mimeType,
+        model: settings.analysisModel,
+        pipeline,
+        agenticVision: settings.agenticVision,
       });
-    } catch (e: any) {
-      onUpdate(slot.id, { status: 'error', error: e.message || "Re-analysis Failed" });
+      const completed: Slot = {
+        ...slot,
+        originalImage: base64,
+        originalMimeType: mimeType,
+        generatedImage: null,
+        generatedMimeType: null,
+        rawAnalysis: output.result,
+        trace: output.trace,
+        report: output.report,
+        analysisText: formatAnalysis(output.result, 'en'),
+        analysisLang: 'en',
+        currentPrompt: output.result.prompt_en,
+        promptLang: 'en',
+        status: 'saving',
+        error: null,
+        savedHistoryId: null,
+      };
+      onUpdate(slot.id, completed);
+      const id = await onSave(completed, 'analysis');
+      onUpdate(slot.id, { status: 'idle', savedHistoryId: id });
+    } catch (error) {
+      onUpdate(slot.id, {
+        status: 'error',
+        error: error instanceof Error ? error.message : '분석에 실패했습니다.',
+        report: error instanceof AnalysisRunError ? error.report : null,
+      });
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
+  const useFile = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      onUpdate(slot.id, { status: 'error', error: '이미지 파일만 사용할 수 있습니다.' });
+      return;
     }
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    await runAnalysis(base64, file.type || 'image/png');
   };
 
-  const handlePaste = (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf("image") !== -1) {
-        const file = items[i].getAsFile();
-        if (file) handleFile(file);
-        break;
-      }
-    }
-  };
-
-  const handleGenerate = async () => {
-    if (!slot.currentPrompt) return;
-    onUpdate(slot.id, { status: 'generating', error: null });
-
-    try {
-      const newImage = await generateImageFromPrompt(slot.currentPrompt, settings);
-      onUpdate(slot.id, { generatedImage: newImage, status: 'idle' });
-      const completeSlot = { ...slot, generatedImage: newImage };
-      onSaveToHistory(completeSlot);
-    } catch (e: any) {
-      onUpdate(slot.id, { status: 'error', error: e.message || "Generation Failed" });
-    }
-  };
-
-  const switchPromptLang = (lang: 'en' | 'ko') => {
+  const switchAnalysisLanguage = (language: 'en' | 'ko') => {
     if (!slot.rawAnalysis) return;
-    onUpdate(slot.id, { 
-      promptLang: lang,
-      currentPrompt: lang === 'en' ? slot.rawAnalysis.prompt_en : slot.rawAnalysis.prompt_ko
+    onUpdate(slot.id, { analysisLang: language, analysisText: formatAnalysis(slot.rawAnalysis, language) });
+  };
+
+  const switchPromptLanguage = (language: 'en' | 'ko') => {
+    if (!slot.rawAnalysis) return;
+    onUpdate(slot.id, {
+      promptLang: language,
+      currentPrompt: language === 'en' ? slot.rawAnalysis.prompt_en : slot.rawAnalysis.prompt_ko,
     });
   };
 
-  const downloadImage = (base64: string) => {
-    const link = document.createElement('a');
-    link.href = `data:image/png;base64,${base64}`;
-    link.download = `nano-gen-${Date.now()}.png`;
-    link.click();
+  const generate = async () => {
+    if (!slot.currentPrompt.trim()) return;
+    onUpdate(slot.id, { status: 'generating', error: null });
+    try {
+      const generated = await generateImageFromPrompt({ apiKey, prompt: slot.currentPrompt, settings });
+      const completed: Slot = {
+        ...slot,
+        generatedImage: generated.base64,
+        generatedMimeType: generated.mimeType,
+        status: 'saving',
+        error: null,
+      };
+      onUpdate(slot.id, completed);
+      const id = await onSave(completed, slot.originalImage ? 'edit' : 'generation');
+      onUpdate(slot.id, { status: 'idle', savedHistoryId: id });
+    } catch (error) {
+      onUpdate(slot.id, { status: 'error', error: error instanceof Error ? error.message : '이미지 생성에 실패했습니다.' });
+    }
   };
+
+  const download = (base64: string, mimeType: string | null) => {
+    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';
+    const anchor = document.createElement('a');
+    anchor.href = dataUrl(base64, mimeType);
+    anchor.download = `nano-banana-${Date.now()}.${extension}`;
+    anchor.click();
+  };
+
+  const downloadReport = () => {
+    if (!slot.report) return;
+    const url = URL.createObjectURL(new Blob([formatAnalysisReport(slot.report)], { type: 'text/markdown;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `nano-banana-report-${new Date(slot.report.createdAt).toISOString().replace(/[:.]/g, '-')}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyText = async (kind: 'analysis' | 'prompt', text: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(kind);
+    window.setTimeout(() => setCopied(null), 1200);
+  };
+
+  const busy = ['analyzing', 'generating', 'saving'].includes(slot.status);
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row h-[720px] mb-8 select-text">
-      
-      {/* LEFT: Input & Analysis */}
-      <div 
-        className={`relative w-full md:w-1/2 p-4 flex flex-col gap-3 border-b md:border-b-0 md:border-r border-zinc-800 transition-colors ${dragActive ? 'bg-zinc-800/50 ring-2 ring-yellow-500/50' : ''}`}
-        onDragEnter={() => setDragActive(true)}
-        onDragLeave={() => setDragActive(false)}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-        onPaste={handlePaste}
-      >
-         <div className="flex justify-between items-center text-xs text-zinc-500 font-bold uppercase tracking-wider select-none">
-            <div className="flex items-center gap-2">
-               <span>Workspace {index + 1}</span>
-               <button 
-                 onClick={() => onDelete(slot.id)}
-                 className="text-zinc-700 hover:text-red-500 transition-colors p-1"
-                 title="Delete Workspace"
-               >
-                 <Trash2 size={12} />
-               </button>
-            </div>
-            <span>Input / Digital Twin Analysis</span>
-         </div>
+    <article
+      className={`workspace-card ${dragging ? 'dragging' : ''}`}
+      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        const file = event.dataTransfer.files[0];
+        if (file) void useFile(file);
+      }}
+      onPaste={(event) => {
+        const file = [...event.clipboardData.items].find((item) => item.type.startsWith('image/'))?.getAsFile();
+        if (file) void useFile(file);
+      }}
+    >
+      <div className="workspace-titlebar">
+        <div>
+          <span className="workspace-index">{String(index + 1).padStart(2, '0')}</span>
+          <span className="ml-3 text-sm font-medium text-slate-200">Analysis workspace</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {slot.trace && (
+            <span className={`trace-chip trace-${slot.trace.agenticVisionStatus.toLowerCase()}`}>
+              {agenticLabel[slot.trace.agenticVisionStatus]}
+            </span>
+          )}
+          <button className="icon-button small" onClick={() => onDelete(slot.id)} aria-label="작업 공간 삭제"><Trash2 size={14} /></button>
+        </div>
+      </div>
 
-         {/* Image Area */}
-         <div className="relative h-48 bg-black/20 rounded-lg border-2 border-dashed border-zinc-700 hover:border-zinc-500 transition-colors flex items-center justify-center overflow-hidden group flex-shrink-0">
+      <div className="workspace-grid">
+        <section className="workspace-pane image-pane">
+          <div className="pane-heading"><span>01</span> 원본 이미지</div>
+          <div
+            className="image-stage"
+            role="button"
+            tabIndex={0}
+            onClick={() => !slot.originalImage && inputRef.current?.click()}
+            onKeyDown={(event) => event.key === 'Enter' && inputRef.current?.click()}
+          >
             {slot.originalImage ? (
-               <>
-                 <img 
-                   src={`data:image/png;base64,${slot.originalImage}`} 
-                   className="max-h-full max-w-full object-contain pointer-events-auto" 
-                   alt="Input"
-                 />
-                 <button 
-                   onClick={() => onUpdate(slot.id, { originalImage: null, rawAnalysis: null, analysisText: '', currentPrompt: '' })}
-                   className="absolute top-2 right-2 bg-black/60 hover:bg-red-500/80 text-white p-1.5 rounded-full backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all z-10"
-                 >
-                   <X size={14} />
-                 </button>
-               </>
+              <>
+                <img src={dataUrl(slot.originalImage, slot.originalMimeType)} alt="분석 원본" />
+                <div className="image-actions">
+                  <button onClick={(event) => { event.stopPropagation(); onOpenModal({ base64: slot.originalImage!, mimeType: slot.originalMimeType || 'image/png' }); }}><Expand size={15} /></button>
+                  <button onClick={(event) => { event.stopPropagation(); download(slot.originalImage!, slot.originalMimeType); }}><Download size={15} /></button>
+                  <button onClick={(event) => { event.stopPropagation(); onUpdate(slot.id, { originalImage: null, originalMimeType: null, rawAnalysis: null, trace: null, report: null, analysisText: '', currentPrompt: '', generatedImage: null, savedHistoryId: null }); }}><X size={15} /></button>
+                </div>
+              </>
             ) : (
-               <div 
-                 onClick={() => fileInputRef.current?.click()}
-                 className="text-center cursor-pointer p-4 w-full h-full flex flex-col items-center justify-center"
-               >
-                  <Upload size={24} className="text-zinc-600 mb-2" />
-                  <p className="text-zinc-400 text-sm font-medium">Click, Paste or Drop Image</p>
-               </div>
+              <div className="upload-callout">
+                <span className="upload-icon"><ImagePlus size={24} /></span>
+                <strong>이미지를 놓거나 클릭하세요</strong>
+                <small>붙여넣기 지원 · 원본 MIME 유지</small>
+              </div>
             )}
-            <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} hidden accept="image/*"/>
-         </div>
+            <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => event.target.files?.[0] && void useFile(event.target.files[0])} />
+          </div>
 
-         {/* Editable Analysis */}
-         <div className="flex-1 flex flex-col min-h-0 relative">
-            <div className="flex justify-between items-center mb-1 select-none">
-               <div className="flex items-center gap-2">
-                 <span className="text-xs text-zinc-400 font-semibold uppercase">Literal Spec Data</span>
-                 <div className="flex gap-1 ml-2">
-                   <button 
-                     onClick={() => switchAnalysisLang('en')} 
-                     disabled={!slot.rawAnalysis}
-                     className={`text-[10px] px-2 py-0.5 rounded transition-colors ${slot.analysisLang === 'en' ? 'bg-zinc-700 text-white' : 'text-zinc-600 hover:text-zinc-400'}`}
-                   >
-                     EN
-                   </button>
-                   <button 
-                     onClick={() => switchAnalysisLang('ko')} 
-                     disabled={!slot.rawAnalysis}
-                     className={`text-[10px] px-2 py-0.5 rounded transition-colors ${slot.analysisLang === 'ko' ? 'bg-zinc-700 text-white' : 'text-zinc-600 hover:text-zinc-400'}`}
-                   >
-                     KO
-                   </button>
-                   {slot.originalImage && (
-                    <button 
-                      onClick={handleReanalyze}
-                      disabled={slot.status === 'analyzing'}
-                      className="ml-1 text-zinc-600 hover:text-yellow-500 transition-colors p-0.5"
-                      title="Re-analyze image"
-                    >
-                      <RefreshCw size={12} className={slot.status === 'analyzing' ? 'animate-spin' : ''} />
-                    </button>
-                   )}
-                 </div>
-               </div>
-               {slot.status === 'analyzing' && <span className="text-xs text-yellow-500 flex items-center gap-1"><Loader2 size={12} className="animate-spin"/> Scanning...</span>}
+          {slot.originalImage && (
+            <button className="secondary-button w-full" disabled={busy} onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png')}>
+              <RefreshCw size={15} /> 현재 설정으로 다시 분석
+            </button>
+          )}
+
+          {slot.trace && (
+            <div className="trace-panel">
+              <div className="flex items-center justify-between">
+                <span>{slot.trace.pipeline === 'harness' ? 'Harness trace' : 'Standard trace'}</span>
+                <b>{(slot.trace.totalDurationMs / 1000).toFixed(1)}s</b>
+              </div>
+              {slot.trace.stages.map((stage) => (
+                <div className="trace-row" key={stage.name}><span>{stage.name}</span><span>{(stage.durationMs / 1000).toFixed(1)}s</span></div>
+              ))}
             </div>
-            <textarea 
-               value={slot.analysisText}
-               onChange={(e) => onUpdate(slot.id, { analysisText: e.target.value })}
-               placeholder="Detailed technical data will appear here..."
-               className="flex-1 w-full bg-zinc-950 p-3 rounded-lg border border-zinc-800 text-[11px] text-zinc-300 font-mono leading-relaxed resize-none focus:outline-none focus:border-yellow-500/50 custom-scrollbar pointer-events-auto"
-            />
-            {slot.analysisText && (
-               <button onClick={() => navigator.clipboard.writeText(slot.analysisText)} className="absolute bottom-2 right-2 text-zinc-600 hover:text-zinc-300 bg-zinc-900/80 p-1 rounded z-10">
-                 <Copy size={12} />
-               </button>
-            )}
-         </div>
-      </div>
+          )}
+        </section>
 
-      {/* RIGHT: Prompt & Generation */}
-      <div className="w-full md:w-1/2 p-4 flex flex-col gap-3 bg-zinc-900/50">
-         <div className="flex justify-between items-center text-xs text-zinc-500 font-bold uppercase tracking-wider select-none">
-            <span>Generation Output</span>
-            {slot.status === 'generating' && <span className="text-purple-400 flex items-center gap-1"><Loader2 size={12} className="animate-spin"/> Synthesizing...</span>}
-         </div>
+        <section className="workspace-pane analysis-pane">
+          <div className="pane-heading-row">
+            <div className="pane-heading"><span>02</span> 분석 사양</div>
+            <div className="segmented">
+              <button className={slot.analysisLang === 'en' ? 'active' : ''} onClick={() => switchAnalysisLanguage('en')}>EN</button>
+              <button className={slot.analysisLang === 'ko' ? 'active' : ''} onClick={() => switchAnalysisLanguage('ko')}>KO</button>
+            </div>
+          </div>
+          <textarea
+            className="analysis-editor"
+            value={slot.analysisText}
+            placeholder="이미지를 분석하면 상세 사양이 여기에 표시됩니다."
+            onChange={(event) => onUpdate(slot.id, { analysisText: event.target.value })}
+          />
+          <button className="text-action" disabled={!slot.analysisText} onClick={() => void copyText('analysis', slot.analysisText)}>
+            {copied === 'analysis' ? <Check size={14} /> : <Copy size={14} />}
+            {copied === 'analysis' ? '복사됨' : '분석 복사'}
+          </button>
+        </section>
 
-         {/* Generated Image Area */}
-         <div className="relative h-48 bg-black/40 rounded-lg border border-zinc-800 flex items-center justify-center overflow-hidden group flex-shrink-0">
+        <section className="workspace-pane output-pane">
+          <div className="pane-heading-row">
+            <div className="pane-heading"><span>03</span> 생성 프롬프트</div>
+            <div className="segmented">
+              <button className={slot.promptLang === 'en' ? 'active' : ''} onClick={() => switchPromptLanguage('en')}>EN</button>
+              <button className={slot.promptLang === 'ko' ? 'active' : ''} onClick={() => switchPromptLanguage('ko')}>KO</button>
+            </div>
+          </div>
+          <textarea
+            className="prompt-editor"
+            value={slot.currentPrompt}
+            placeholder="추출된 생성 프롬프트"
+            onChange={(event) => onUpdate(slot.id, { currentPrompt: event.target.value })}
+          />
+          <div className="flex gap-2">
+            <button className="text-action" disabled={!slot.currentPrompt} onClick={() => void copyText('prompt', slot.currentPrompt)}>
+              {copied === 'prompt' ? <Check size={14} /> : <Copy size={14} />}
+              {copied === 'prompt' ? '복사됨' : '프롬프트 복사'}
+            </button>
+            <button className="text-action" disabled={!slot.rawAnalysis || busy} onClick={() => void onSave(slot, slot.generatedImage ? 'edit' : 'analysis')}>
+              <Save size={14} /> 저장
+            </button>
+          </div>
+
+          <button className="primary-button" disabled={!slot.currentPrompt.trim() || busy} onClick={() => void generate()}>
+            {slot.status === 'generating' ? <LoaderCircle className="animate-spin" size={17} /> : <WandSparkles size={17} />}
+            {slot.status === 'generating' ? '이미지 생성 중' : '프롬프트로 이미지 생성'}
+          </button>
+
+          <div className="generated-stage">
             {slot.generatedImage ? (
-               <>
-                 <img 
-                   src={`data:image/png;base64,${slot.generatedImage}`} 
-                   className="max-h-full max-w-full object-contain pointer-events-auto" 
-                   alt="Output"
-                 />
-                 <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                    <button onClick={() => onOpenModal({ base64: slot.generatedImage!, prompt: slot.currentPrompt })} className="bg-black/60 hover:bg-black p-1.5 rounded-md text-white backdrop-blur"><Maximize2 size={14}/></button>
-                    <button onClick={() => downloadImage(slot.generatedImage!)} className="bg-black/60 hover:bg-black p-1.5 rounded-md text-white backdrop-blur"><Download size={14}/></button>
-                    <button onClick={() => onUpdate(slot.id, { generatedImage: null })} className="bg-black/60 hover:bg-red-500 p-1.5 rounded-md text-white backdrop-blur"><Trash2 size={14}/></button>
-                 </div>
-               </>
+              <>
+                <img src={dataUrl(slot.generatedImage, slot.generatedMimeType)} alt="생성 결과" />
+                <div className="image-actions">
+                  <button onClick={() => onOpenModal({ base64: slot.generatedImage!, mimeType: slot.generatedMimeType || 'image/jpeg', prompt: slot.currentPrompt })}><Expand size={15} /></button>
+                  <button onClick={() => download(slot.generatedImage!, slot.generatedMimeType)}><Download size={15} /></button>
+                </div>
+              </>
             ) : (
-               <div className="text-zinc-700 flex flex-col items-center select-none">
-                  < Wand2 size={24} className="mb-2 opacity-50"/>
-                  <span className="text-xs">Generated Visual Data</span>
-               </div>
+              <span>생성 결과 미리보기</span>
             )}
-         </div>
-
-         {/* Prompt Editor */}
-         <div className="flex-1 flex flex-col min-h-0 relative">
-             <div className="flex justify-between items-center mb-1 select-none">
-               <div className="flex gap-1">
-                 <button onClick={() => switchPromptLang('en')} className={`text-[10px] px-2 py-0.5 rounded ${slot.promptLang === 'en' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>EN</button>
-                 <button onClick={() => switchPromptLang('ko')} className={`text-[10px] px-2 py-0.5 rounded ${slot.promptLang === 'ko' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>KO</button>
-               </div>
-               <button onClick={() => navigator.clipboard.writeText(slot.currentPrompt)} className="text-zinc-500 hover:text-white"><Copy size={12}/></button>
-             </div>
-             <textarea 
-               value={slot.currentPrompt}
-               onChange={(e) => onUpdate(slot.id, { currentPrompt: e.target.value })}
-               className="flex-1 w-full bg-zinc-950 p-3 rounded-lg border border-zinc-800 text-sm text-zinc-300 leading-relaxed resize-none focus:outline-none focus:border-purple-500/50 custom-scrollbar pointer-events-auto"
-               placeholder="High-precision generation tags..."
-             />
-         </div>
-
-         {/* Generate Button */}
-         <button 
-           onClick={handleGenerate}
-           disabled={!slot.currentPrompt || slot.status === 'generating'}
-           className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold py-2 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none"
-         >
-            {slot.status === 'generating' ? 'Synthesizing...' : 'Reconstruct Image'}
-         </button>
-
-         {/* Error Toast */}
-         {slot.error && (
-            <div className="text-xs text-red-400 bg-red-900/10 p-2 rounded border border-red-900/30">
-               Error: {slot.error}
-            </div>
-         )}
+          </div>
+        </section>
       </div>
-    </div>
+
+      {slot.report && (
+        <details className={`analysis-report ${slot.report.outcome !== 'completed' ? 'report-failed' : ''}`} open>
+          <summary>
+            <span><FileText size={15} /> 분석 실행 리포트</span>
+            <span className="report-summary">
+              <b>{slot.report.requestedModel}</b>
+              <i>{agenticLabel[slot.report.agenticVisionStatus]}</i>
+              <i>{slot.report.inspections.length}회 정밀검사</i>
+              <i>{formatUsd(slot.report.cost.totalUsd)}</i>
+              <i>{(slot.report.totalDurationMs / 1000).toFixed(2)}s</i>
+            </span>
+          </summary>
+          <div className="report-body">
+            <div className="report-metrics">
+              <span><small>실행 결과</small><b>{slot.report.outcome}</b></span>
+              <span><small>선택 / 실행 모델</small><b>{slot.report.requestedModel}<br />{slot.report.resolvedModels.join(', ') || '응답 없음'}</b></span>
+              <span><small>Agentic Vision 직접 귀속 추정</small><b>{formatUsd(slot.report.cost.agenticAttributedUsd)}</b></span>
+              <span><small>토큰 / 시간</small><b>{slot.report.usage.totalTokens.toLocaleString()} / {(slot.report.totalDurationMs / 1000).toFixed(2)}s</b></span>
+            </div>
+            {slot.report.failure && (
+              <div className="report-failure">
+                <b>{slot.report.failure.stage} 단계에서 중단됨</b>
+                <span>{slot.report.failure.reason}</span>
+              </div>
+            )}
+            {slot.report.inspections.length > 0 && (
+              <div className="inspection-grid">
+                {slot.report.inspections.map((inspection) => (
+                  <div key={`${inspection.index}-${inspection.area}`}>
+                    <b>검사 {inspection.index} · {inspection.area}</b>
+                    <span>{inspection.purpose}</span>
+                    <small>{inspection.resultExcerpt || '텍스트 결과 없음'}</small>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="secondary-button report-download" onClick={downloadReport}>
+              <Download size={14} /> 리포트 .md 저장
+            </button>
+            <pre>{formatAnalysisReport(slot.report)}</pre>
+          </div>
+        </details>
+      )}
+
+      {busy && (
+        <div className="busy-overlay">
+          <LoaderCircle className="animate-spin" size={24} />
+          <span>{slot.status === 'analyzing' ? '이미지 분석 중' : slot.status === 'generating' ? '이미지 생성 중' : '히스토리에 저장 중'}</span>
+        </div>
+      )}
+      {slot.error && <div className="error-banner">{slot.error}</div>}
+    </article>
   );
-};
+}

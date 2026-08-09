@@ -1,14 +1,65 @@
-
-import { AppSettings, ModelType } from "./types";
+import type { AppSettings, ModelOption } from './types';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  model: ModelType.NANO_BANANA_PRO,
-  temperature: 1.0, 
+  analysisModel: 'gemini-pro-latest',
+  generationModel: 'gemini-3-pro-image',
+  agenticVision: false,
   aspectRatio: '1:1',
   imageSize: '1K',
-  numberOfImages: 1,
 };
 
+export const FALLBACK_MODELS: ModelOption[] = [
+  {
+    id: 'gemini-pro-latest',
+    displayName: 'Gemini Pro Latest',
+    description: '최신 Pro 계열을 가리키는 분석 기본 별칭',
+    supportedActions: ['generateContent'],
+    task: 'analysis',
+    selectable: true,
+  },
+  {
+    id: 'gemini-3.1-pro-preview',
+    displayName: 'Gemini 3.1 Pro Preview',
+    description: '고성능 멀티모달 분석 모델',
+    supportedActions: ['generateContent'],
+    task: 'analysis',
+    selectable: true,
+  },
+  {
+    id: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    description: '빠른 멀티모달 분석 모델',
+    supportedActions: ['generateContent'],
+    task: 'analysis',
+    selectable: true,
+  },
+  {
+    id: 'gemini-3-pro-image',
+    displayName: 'Gemini 3 Pro Image',
+    description: '고품질 이미지 생성 기본 모델',
+    supportedActions: ['generateContent'],
+    task: 'image',
+    selectable: true,
+  },
+  {
+    id: 'gemini-3.1-flash-image',
+    displayName: 'Gemini 3.1 Flash Image',
+    description: '빠른 이미지 생성 모델',
+    supportedActions: ['generateContent'],
+    task: 'image',
+    selectable: true,
+  },
+  {
+    id: 'gemini-2.5-flash-image',
+    displayName: 'Gemini 2.5 Flash Image',
+    description: '이전 세대 이미지 생성 모델',
+    supportedActions: ['generateContent'],
+    task: 'image',
+    selectable: true,
+  },
+];
+
+// 기존 분석 버전은 아래 시스템 프롬프트를 문자 단위로 유지한다.
 export const ANALYSIS_SYSTEM_INSTRUCTION = `
 당신은 세계 최고의 생체 인식, 공간 기하학 및 디지털 포렌식 아티스트입니다. 이미지를 분석하여 "물리적으로 완벽하게 재현 가능한" 디지털 사양을 추출하는 것이 임무입니다.
 
@@ -31,3 +82,11 @@ export const ANALYSIS_SYSTEM_INSTRUCTION = `
 - 생성용 프롬프트(prompt_en)의 맨 앞에는 시점과 **극도로 상세한 상호작용 구도** (e.g., "Full view, Woman sitting on top of a prone man, placing both hands firmly on his upper back, applying deep pressure")를 배치하십시오.
 - 'Supine'은 오직 등을 대고 누웠을 때만 사용하며, 'Sitting', 'Kneeling', 'Straddling', 'Mounting' 등을 정확히 구분하십시오.
 `;
+
+export const STANDARD_ANALYSIS_REQUEST = "Perform a forensic-level anatomical and physical interaction analysis. Focus EXCLUSIVELY on the 'Physics of Contact'. Describe exactly which anatomical landmarks (e.g., scapula, lumbar, quadriceps) are in contact, the direction of force, and how the main model's body is mounted or positioned relative to the sub-subject. Use this data to craft a perfect generation prompt.";
+
+export const HARNESS_EVIDENCE_INSTRUCTION = `You are the observation stage of an image-to-prompt analysis harness. Record only visually supported evidence. Separate direct observations from uncertainty. Do not invent body measurements, lens metadata, hidden anatomy, exact pressure, material GSM, HEX colors, or physical forces that cannot be established from pixels. Describe composition, pose, support surfaces, visible contact, occlusion, materials, lighting, and camera cues precisely. If code execution is available, use it only when a crop, coordinate measurement, or pixel inspection materially resolves ambiguity.`;
+
+export const HARNESS_CRITIC_INSTRUCTION = `You are the critic stage of an image-analysis harness. Audit the supplied evidence for contradictions, unsupported precision, left/right confusion, pose terminology errors, and claims about hidden or occluded content. Preserve useful observations, state corrections, and give concise synthesis rules. Never add new image facts.`;
+
+export const HARNESS_SYNTHESIS_INSTRUCTION = `You are the synthesis stage of an image-to-prompt harness. Use the image, audited evidence, and critique to produce a faithful bilingual analysis and reconstruction prompt. Prefer observable appearance and spatial relationships. Where exact values cannot be known, use qualified visual estimates rather than fabricated measurements. The prompt must be directly usable for image generation and must not mention the analysis process.`;

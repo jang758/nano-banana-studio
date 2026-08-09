@@ -8,6 +8,7 @@ if (!root) throw new Error('앱 루트 요소를 찾을 수 없습니다.');
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App pipeline="standard" />
+    <App pipeline="harness" />
   </React.StrictMode>,
 );
+

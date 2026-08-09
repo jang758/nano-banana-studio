@@ -1,156 +1,161 @@
+import { useEffect, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Archive, Database, Download, HardDrive, LoaderCircle, Search, Trash2, X } from 'lucide-react';
+import { exportAllHistory, getStorageStatus, getThumbnailBlob, requestPersistentStorage } from '../services/storageService';
+import type { HistoryMetadata, StorageStatus } from '../types';
+import { formatUsd } from '../utils/analysisReport';
 
-import React, { useState, useEffect } from 'react';
-import { HistoryItem, ModalData } from '../types';
-import { Trash2, Download, History, X, Loader2, Image as ImageIcon } from 'lucide-react';
-import { getFullHistoryItem } from '../services/storageService';
-
-interface HistorySidebarProps {
-  historyMetadata: Partial<HistoryItem>[];
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-  onClear: () => void;
+interface Props {
+  items: HistoryMetadata[];
   isOpen: boolean;
-  setIsOpen: (open: boolean) => void;
-  onOpenModal: (data: ModalData) => void;
-}
-
-// Added explicit interface for HistoryCard props to fix JSX 'key' property error
-interface HistoryCardProps {
-  item: Partial<HistoryItem>;
+  hasMore: boolean;
+  onClose: () => void;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-  onOpenModal: (data: ModalData) => void;
+  onLoadMore: () => Promise<void>;
+  onSearch: (query: string) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onClear: () => Promise<void>;
 }
 
-// 개별 히스토리 아이템 컴포넌트 (이미지 로딩 최적화)
-// Fixed typing using React.FC to avoid 'key' property error during map()
-const HistoryCard: React.FC<HistoryCardProps> = ({ item, onSelect, onDelete, onOpenModal }) => {
-  const [imgData, setImgData] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+function formatBytes(value: number): string {
+  if (!value) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  return `${(value / (1024 ** index)).toFixed(index > 2 ? 1 : 0)} ${units[index]}`;
+}
 
+function HistoryRow({ item, onSelect, onDelete }: {
+  item: HistoryMetadata;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [thumbnail, setThumbnail] = useState<string | null>(null);
   useEffect(() => {
-    // 사이드바가 열려있을 때만 이미지 로드 시도
-    let isMounted = true;
-    const loadThumb = async () => {
-      if (!item.id) return;
-      setLoading(true);
-      const fullItem = await getFullHistoryItem(item.id);
-      if (isMounted && fullItem) {
-        setImgData(fullItem.generatedImageBase64 || fullItem.originalImageBase64 || null);
-      }
-      setLoading(false);
+    let url: string | null = null;
+    let active = true;
+    void getThumbnailBlob(item.id).then((blob) => {
+      if (!blob || !active) return;
+      url = URL.createObjectURL(blob);
+      setThumbnail(url);
+    });
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
     };
-    loadThumb();
-    return () => { isMounted = false; };
   }, [item.id]);
 
   return (
-    <div 
-      className="group relative bg-zinc-800/30 hover:bg-zinc-800 rounded-lg p-2 cursor-pointer border border-transparent hover:border-yellow-500/30 transition-all"
-      onClick={() => item.id && onSelect(item.id)}
-    >
-      <div className="flex gap-2">
-        <div 
-          className="w-16 h-16 bg-zinc-950 rounded overflow-hidden flex-shrink-0 relative flex items-center justify-center border border-zinc-800"
-          onClick={(e) => { 
-            e.stopPropagation(); 
-            if (imgData) onOpenModal({ base64: imgData, prompt: item.promptUsed });
-          }}
-        >
-          {loading ? (
-            <Loader2 size={16} className="animate-spin text-zinc-700" />
-          ) : imgData ? (
-            <img src={`data:image/png;base64,${imgData}`} className="w-full h-full object-cover" alt="Thumb" />
-          ) : (
-            <ImageIcon size={16} className="text-zinc-800" />
-          )}
+    <div className="history-row" onClick={() => onSelect(item.id)}>
+      <div className="history-thumb">{thumbnail ? <img src={thumbnail} alt="" /> : <Archive size={17} />}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={`history-mode ${item.pipeline}`}>{item.pipeline === 'harness' ? 'HARNESS' : 'ORIGINAL'}</span>
+          <time>{new Date(item.timestamp).toLocaleString()}</time>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-[10px] text-zinc-500 truncate">
-            {item.timestamp ? new Date(item.timestamp).toLocaleString() : ''}
-          </p>
-          <p className="text-xs text-zinc-300 line-clamp-2 mt-1 leading-snug">
-            {item.promptUsed}
-          </p>
-        </div>
+        <strong>{item.title}</strong>
+        <p>{item.promptUsed}</p>
+        {item.report && (
+          <div className="history-report">
+            <span>{item.report.requestedModel}</span>
+            <span>AV {item.report.agenticVisionStatus}</span>
+            <span>{formatUsd(item.report.cost.totalUsd)}</span>
+          </div>
+        )}
       </div>
-      <button 
-        onClick={(e) => { e.stopPropagation(); item.id && onDelete(item.id); }}
-        className="absolute top-1 right-1 p-1 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-      >
-        <Trash2 size={12} />
-      </button>
+      <button className="history-delete" onClick={(event) => { event.stopPropagation(); void onDelete(item.id); }} aria-label="기록 삭제"><Trash2 size={13} /></button>
     </div>
   );
-};
+}
 
-export const HistorySidebar: React.FC<HistorySidebarProps> = ({
-  historyMetadata,
-  onSelect,
-  onDelete,
-  onClear,
-  isOpen,
-  setIsOpen,
-  onOpenModal
-}) => {
-  const [isZipping, setIsZipping] = useState(false);
+export function HistorySidebar({ items, isOpen, hasMore, onClose, onSelect, onLoadMore, onSearch, onDelete, onClear }: Props) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState('');
+  const [storage, setStorage] = useState<StorageStatus>({ supported: true, persisted: false, usage: 0, quota: 0 });
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState('');
+  const [loadingMore, setLoadingMore] = useState(false);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 122,
+    overscan: 8,
+  });
 
-  const downloadAll = async () => {
-    if (historyMetadata.length === 0) return;
-    setIsZipping(true);
-    try {
-      const zip = new window.JSZip();
-      for (const meta of historyMetadata) {
-        if (!meta.id) continue;
-        const item = await getFullHistoryItem(meta.id);
-        if (!item) continue;
-        
-        const dateStr = new Date(item.timestamp).toISOString().replace(/[:.]/g, '-');
-        const folder = zip.folder(`item_${item.id.slice(-4)}_${dateStr}`);
-        folder.file("prompt.txt", item.promptUsed);
-        if (item.generatedImageBase64) folder.file("generated.png", item.generatedImageBase64, { base64: true });
-        // 메모리 방전을 방지하기 위한 틱
-        await new Promise(r => setTimeout(r, 0));
-      }
-      const content = await zip.generateAsync({ type: "blob" });
-      window.saveAs(content, `backup_${Date.now()}.zip`);
-    } catch (err) {
-      alert("압축 중 메모리 오류가 발생했습니다. 개별 저장을 이용하세요.");
-    } finally {
-      setIsZipping(false);
-    }
-  };
+  useEffect(() => { void getStorageStatus().then(setStorage); }, [items.length]);
+  const percent = storage.quota ? Math.min(100, (storage.usage / storage.quota) * 100) : 0;
 
   return (
     <>
-      {isOpen && <div className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm" onClick={() => setIsOpen(false)} />}
-      <div className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-zinc-900 border-r border-zinc-800 transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="flex flex-col h-full">
-          <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
-            <h2 className="text-lg font-bold text-yellow-500 flex items-center gap-2 italic">
-              <History size={18} /> HISTORY
-            </h2>
-            <button onClick={() => setIsOpen(false)} className="lg:hidden text-zinc-500 hover:text-white"><X size={20} /></button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar bg-black/20">
-            {historyMetadata.length === 0 ? (
-              <div className="text-zinc-600 text-center py-20 text-sm">No items found</div>
-            ) : (
-              historyMetadata.map((item) => (
-                <HistoryCard key={item.id} item={item} onSelect={onSelect} onDelete={onDelete} onOpenModal={onOpenModal} />
-              ))
-            )}
-          </div>
-          <div className="p-4 border-t border-zinc-800 space-y-2 bg-zinc-900">
-            <button onClick={downloadAll} disabled={isZipping} className="w-full flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 py-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50">
-              {isZipping ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} ZIP EXPORT
-            </button>
-            <button onClick={onClear} className="w-full flex items-center justify-center gap-2 text-red-500/70 hover:text-red-400 py-2 text-xs transition-colors">
-              <Trash2 size={14} /> Clear DB
-            </button>
-          </div>
+      {isOpen && <button className="sidebar-backdrop lg:hidden" onClick={onClose} aria-label="히스토리 닫기" />}
+      <aside className={`history-sidebar ${isOpen ? 'open' : ''}`}>
+        <div className="history-header">
+          <div><p className="eyebrow">LOCAL ARCHIVE</p><h2><Database size={17} /> History</h2></div>
+          <button className="icon-button lg:hidden" onClick={onClose}><X size={17} /></button>
         </div>
-      </div>
+
+        <form className="history-search" onSubmit={(event) => { event.preventDefault(); void onSearch(query); }}>
+          <Search size={15} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="프롬프트·분석 검색" />
+          {query && <button type="button" onClick={() => { setQuery(''); void onSearch(''); }}><X size={13} /></button>}
+        </form>
+
+        <div ref={parentRef} className="history-list">
+          {items.length === 0 ? (
+            <div className="empty-history"><Archive size={24} /><span>저장된 분석이 없습니다</span></div>
+          ) : (
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map((virtualItem) => {
+                const item = items[virtualItem.index];
+                return (
+                  <div
+                    key={item.id}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualItem.index}
+                    style={{ position: 'absolute', insetInline: 0, transform: `translateY(${virtualItem.start}px)` }}
+                  >
+                    <HistoryRow item={item} onSelect={onSelect} onDelete={onDelete} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {hasMore && (
+            <button className="load-more" disabled={loadingMore} onClick={async () => {
+              setLoadingMore(true);
+              await onLoadMore();
+              setLoadingMore(false);
+            }}>{loadingMore ? <LoaderCircle className="animate-spin" size={14} /> : null} 더 불러오기</button>
+          )}
+        </div>
+
+        <div className="history-footer">
+          <div className="storage-card">
+            <div><span><HardDrive size={13} /> 브라우저 저장소</span><b>{formatBytes(storage.usage)} / {formatBytes(storage.quota)}</b></div>
+            <div className="storage-bar"><i style={{ width: `${percent}%` }} /></div>
+            <button disabled={storage.persisted || !storage.supported} onClick={() => void requestPersistentStorage().then(setStorage)}>
+              {storage.persisted ? '지속 저장 허용됨' : '지속 저장 요청'}
+            </button>
+          </div>
+          <button className="secondary-button w-full" disabled={exporting || !items.length} onClick={async () => {
+            setExporting(true);
+            try {
+              await exportAllHistory((done, total) => setExportProgress(`${done} / ${total}`));
+            } catch (error) {
+              if (!(error instanceof DOMException && error.name === 'AbortError')) alert(error instanceof Error ? error.message : '내보내기에 실패했습니다.');
+            } finally {
+              setExporting(false);
+              setExportProgress('');
+            }
+          }}>
+            {exporting ? <LoaderCircle className="animate-spin" size={14} /> : <Download size={14} />}
+            {exporting ? `내보내는 중 ${exportProgress}` : '전체 원본 + 분석 ZIP 내보내기'}
+          </button>
+          <button className="danger-text-button" disabled={!items.length} onClick={async () => {
+            if (!confirm('새 저장소의 히스토리와 이미지 파일을 모두 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
+            await onClear();
+          }}><Trash2 size={13} /> 전체 삭제</button>
+        </div>
+      </aside>
     </>
   );
-};
+}

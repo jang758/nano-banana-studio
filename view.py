@@ -1,6 +1,7 @@
+import sys
 import webview
 
-# 여기가 3000번인지 확인!
-webview.create_window('나만의 앱 3호점', 'http://localhost:3000', width=1200, height=900)
-
+route = sys.argv[1] if len(sys.argv) > 1 else "/"
+title = sys.argv[2] if len(sys.argv) > 2 else "Nano Banana Studio"
+webview.create_window(title, f"http://127.0.0.1:3000{route}", width=1480, height=940)
 webview.start()
