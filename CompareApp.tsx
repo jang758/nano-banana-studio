@@ -35,11 +35,13 @@ function ResultCard({
   subtitle,
   state,
   onRetry,
+  language,
 }: {
   title: string;
   subtitle: string;
   state: CompareSideState;
   onRetry: () => void;
+  language: 'en' | 'ko';
 }) {
   const { output, report, error, historyId, saveError } = state;
   return (
@@ -61,9 +63,9 @@ function ResultCard({
           {historyId && <div className="compare-save-state"><CheckCircle2 size={15} /> 히스토리에 저장됨</div>}
           {saveError && <div className="compare-side-error">분석은 완료됐지만 히스토리 저장 실패: {saveError}</div>}
           <h3>생성 프롬프트</h3>
-          <textarea className="compare-prompt" readOnly value={output.result.prompt_en} />
+          <textarea className="compare-prompt" readOnly value={language === 'en' ? output.result.prompt_en : output.result.prompt_ko} />
           <h3>분석 사양</h3>
-          <textarea className="compare-analysis" readOnly value={formatAnalysis(output.result, 'ko')} />
+          <textarea className="compare-analysis" readOnly value={formatAnalysis(output.result, language)} />
         </>
       ) : error ? (
         <div className="compare-side-error">
@@ -98,6 +100,7 @@ export default function CompareApp({
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [customModel, setCustomModel] = useState('');
+  const [resultLanguage, setResultLanguage] = useState<'en' | 'ko'>('en');
   const analysisModels = useMemo(
     () => models.filter((model) => model.task === 'analysis' && model.selectable),
     [models],
@@ -319,15 +322,24 @@ export default function CompareApp({
           </div>
         )}
 
-        {(session.standard.report || session.harness.report) && (
-          <button className="secondary-button compare-report-download" onClick={downloadComparisonReport}>
-            <Download size={15} /> 비교 리포트 .md 저장
-          </button>
-        )}
+        <div className="compare-result-toolbar">
+          {(session.standard.report || session.harness.report) && (
+            <button className="secondary-button compare-report-download" onClick={downloadComparisonReport}>
+              <Download size={15} /> 비교 리포트 .md 저장
+            </button>
+          )}
+          <div className="compare-language-control">
+            <span>결과 언어</span>
+            <div className="segmented" role="group" aria-label="비교 결과 언어">
+              <button className={resultLanguage === 'en' ? 'active' : ''} aria-pressed={resultLanguage === 'en'} onClick={() => setResultLanguage('en')}>EN</button>
+              <button className={resultLanguage === 'ko' ? 'active' : ''} aria-pressed={resultLanguage === 'ko'} onClick={() => setResultLanguage('ko')}>KO</button>
+            </div>
+          </div>
+        </div>
 
         <div className="compare-grid">
-          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} onRetry={() => void run(['standard'], true)} />
-          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} onRetry={() => void run(['harness'], true)} />
+          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} language={resultLanguage} onRetry={() => void run(['standard'], true)} />
+          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} language={resultLanguage} onRetry={() => void run(['harness'], true)} />
         </div>
       </main>
     </div>

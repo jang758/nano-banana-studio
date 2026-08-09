@@ -14,4 +14,12 @@ describe('manual retry controls', () => {
     expect(source).toContain("run(['standard'], true)");
     expect(source).toContain("run(['harness'], true)");
   });
+
+  it('defaults comparison results to English and switches both result cards together', () => {
+    const source = readFileSync(new URL('../CompareApp.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("useState<'en' | 'ko'>('en')");
+    expect(source).toContain("formatAnalysis(output.result, language)");
+    expect(source).toContain("language === 'en' ? output.result.prompt_en : output.result.prompt_ko");
+    expect(source).not.toContain("formatAnalysis(output.result, 'ko')");
+  });
 });

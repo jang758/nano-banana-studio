@@ -152,7 +152,7 @@ Use the buttons over the generated image to enlarge or download it.
 3. Add an image by clicking, pasting, or dragging it into the source area.
 4. Select `동일 조건 A/B 분석 실행`.
 
-Each side displays its generation prompt, Korean analysis specifications, elapsed time, tokens, estimated cost, and analysis report. Each successful result is saved to History separately.
+Each side displays its generation prompt, analysis specifications, elapsed time, tokens, estimated cost, and analysis report. Use `EN` or `KO` under `결과 언어` to switch both sides' prompts and analysis specifications together. English is the default. Each successful result is saved to History separately.
 
 - If one side fails, use `실패 단계부터 재시도` to rerun only its failed stage and downstream stages. You may select another model first; previously successful stages are not called again.
 - Use `비교 리포트 .md 저장` to save both reports in one Markdown file.
