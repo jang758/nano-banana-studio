@@ -147,11 +147,11 @@ const CRITIQUE_JSON_SCHEMA = {
   additionalProperties: false,
 };
 
-const SAFETY_SETTINGS = [
-  { type: 'harassment', threshold: 'block_none' },
-  { type: 'hate_speech', threshold: 'block_none' },
-  { type: 'sexually_explicit', threshold: 'block_none' },
-  { type: 'dangerous_content', threshold: 'block_none' },
+export const SAFETY_SETTINGS = [
+  { type: 'harassment', threshold: 'off' },
+  { type: 'hate_speech', threshold: 'off' },
+  { type: 'sexually_explicit', threshold: 'off' },
+  { type: 'dangerous_content', threshold: 'off' },
 ];
 
 const imageInput = (base64: string, mimeType: string) => ({

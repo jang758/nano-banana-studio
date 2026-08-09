@@ -77,7 +77,7 @@ export function HistorySidebar({ items, isOpen, hasMore, onClose, onSelect, onLo
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 122,
+    estimateSize: () => 108,
     overscan: 8,
   });
 

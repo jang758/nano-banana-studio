@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { HistorySidebar } from './components/HistorySidebar';
 import { ImageModal } from './components/ImageModal';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -154,12 +154,6 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
     }
   }, [apiKey]);
 
-  const selectableCounts = useMemo(() => ({
-    analysis: models.filter((model) => model.task === 'analysis' && model.selectable).length,
-    image: models.filter((model) => model.task === 'image' && model.selectable).length,
-    total: models.length,
-  }), [models]);
-
   return (
     <div className="app-shell">
       <HistorySidebar
@@ -192,7 +186,7 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
 
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-30 border-b border-white/8 bg-[#090b0f]/88 backdrop-blur-xl">
-          <div className="mx-auto flex h-16 max-w-[1800px] items-center gap-3 px-4 lg:px-6">
+          <div className="mx-auto flex h-14 max-w-[1800px] items-center gap-3 px-4 lg:px-5">
             <button className="icon-button lg:hidden" onClick={() => setHistoryOpen(true)} aria-label="히스토리 열기">
               <History size={18} />
             </button>
@@ -212,8 +206,8 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
           </div>
         </header>
 
-        <main className="mx-auto max-w-[1800px] px-4 py-5 lg:px-6 lg:py-7">
-          <section className="mb-5 grid gap-3 xl:grid-cols-[1fr_auto]">
+        <main className="mx-auto max-w-[1800px] px-4 py-4 lg:px-5 lg:py-5">
+          <section className="mb-4">
             <div>
               <p className="eyebrow">IMAGE → ANALYSIS → RECONSTRUCTION</p>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white lg:text-3xl">
@@ -225,18 +219,13 @@ export default function App({ pipeline }: { pipeline: AnalysisPipeline }) {
                   : 'Agentic Vision 없이도 완결되는 증거 수집 → 교차 비평 → 최종 합성 파이프라인입니다.'}
               </p>
             </div>
-            <div className="metric-strip">
-              <span><b>{selectableCounts.analysis}</b> 분석</span>
-              <span><b>{selectableCounts.image}</b> 생성</span>
-              <span><b>{selectableCounts.total}</b> 전체 모델</span>
-            </div>
           </section>
 
           {notice && (
             <button className="notice" onClick={() => setNotice('')} title="닫기">{notice}</button>
           )}
 
-          <div className="space-y-5">
+          <div className="space-y-4">
             {slots.map((slot, index) => (
               <WorkspaceSlot
                 key={slot.id}

@@ -201,7 +201,14 @@ export function WorkspaceSlot({
 
       <div className="workspace-grid">
         <section className="workspace-pane image-pane">
-          <div className="pane-heading"><span>01</span> 원본 이미지</div>
+          <div className="pane-heading-row">
+            <div className="pane-heading"><span>01</span> 원본 이미지</div>
+            {slot.originalImage && (
+              <button className="text-action pane-action" disabled={busy} onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png')}>
+                <RefreshCw size={13} /> 다시 분석
+              </button>
+            )}
+          </div>
           <div
             className="image-stage"
             role="button"
@@ -228,12 +235,6 @@ export function WorkspaceSlot({
             <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => event.target.files?.[0] && void useFile(event.target.files[0])} />
           </div>
 
-          {slot.originalImage && (
-            <button className="secondary-button w-full" disabled={busy} onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png')}>
-              <RefreshCw size={15} /> 현재 설정으로 다시 분석
-            </button>
-          )}
-
           {slot.trace && (
             <div className="trace-panel">
               <div className="flex items-center justify-between">
@@ -250,9 +251,15 @@ export function WorkspaceSlot({
         <section className="workspace-pane analysis-pane">
           <div className="pane-heading-row">
             <div className="pane-heading"><span>02</span> 분석 사양</div>
-            <div className="segmented">
-              <button className={slot.analysisLang === 'en' ? 'active' : ''} onClick={() => switchAnalysisLanguage('en')}>EN</button>
-              <button className={slot.analysisLang === 'ko' ? 'active' : ''} onClick={() => switchAnalysisLanguage('ko')}>KO</button>
+            <div className="pane-tools">
+              <div className="segmented">
+                <button className={slot.analysisLang === 'en' ? 'active' : ''} onClick={() => switchAnalysisLanguage('en')}>EN</button>
+                <button className={slot.analysisLang === 'ko' ? 'active' : ''} onClick={() => switchAnalysisLanguage('ko')}>KO</button>
+              </div>
+              <button className="text-action pane-action" disabled={!slot.analysisText} onClick={() => void copyText('analysis', slot.analysisText)}>
+                {copied === 'analysis' ? <Check size={13} /> : <Copy size={13} />}
+                {copied === 'analysis' ? '복사됨' : '복사'}
+              </button>
             </div>
           </div>
           <textarea
@@ -261,10 +268,6 @@ export function WorkspaceSlot({
             placeholder="이미지를 분석하면 상세 사양이 여기에 표시됩니다."
             onChange={(event) => onUpdate(slot.id, { analysisText: event.target.value })}
           />
-          <button className="text-action" disabled={!slot.analysisText} onClick={() => void copyText('analysis', slot.analysisText)}>
-            {copied === 'analysis' ? <Check size={14} /> : <Copy size={14} />}
-            {copied === 'analysis' ? '복사됨' : '분석 복사'}
-          </button>
         </section>
 
         <section className="workspace-pane output-pane">
@@ -313,7 +316,7 @@ export function WorkspaceSlot({
       </div>
 
       {slot.report && (
-        <details className={`analysis-report ${slot.report.outcome !== 'completed' ? 'report-failed' : ''}`} open>
+        <details className={`analysis-report ${slot.report.outcome !== 'completed' ? 'report-failed' : ''}`}>
           <summary>
             <span><FileText size={15} /> 분석 실행 리포트</span>
             <span className="report-summary">

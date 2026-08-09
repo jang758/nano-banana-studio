@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analysisResultSchema } from '../services/geminiService';
-import { ANALYSIS_JSON_SCHEMA } from '../services/geminiService';
+import { ANALYSIS_JSON_SCHEMA, SAFETY_SETTINGS } from '../services/geminiService';
 import { DEFAULT_SETTINGS } from '../constants';
 import type { AnalysisResult } from '../types';
 import { formatAnalysis } from '../utils/analysisFormat';
@@ -36,5 +36,10 @@ describe('analysis contract', () => {
     expect(ANALYSIS_JSON_SCHEMA.required.slice(0, 6)).toEqual([
       'face', 'face_ko', 'expression', 'expression_ko', 'body', 'body_ko',
     ]);
+  });
+
+  it('uses the current Gemini OFF safety threshold for every adjustable category', () => {
+    expect(SAFETY_SETTINGS).toHaveLength(4);
+    expect(SAFETY_SETTINGS.every((setting) => setting.threshold === 'off')).toBe(true);
   });
 });
