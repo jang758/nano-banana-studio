@@ -5,7 +5,11 @@ import {
   analyzeImage,
   buildAnalysisRequest,
   callGenerateContentWithRetry,
+  classifyModel,
+  listAvailableModels,
+  publicApiError,
   stageReport,
+  thinkingConfigForModel,
 } from '../services/geminiService';
 
 const finalAnalysis = {
@@ -66,7 +70,30 @@ describe('generateContent request contract', () => {
     expect(payload.safetySettings.every((setting) => setting.threshold === 'OFF')).toBe(true);
     expect(payload.generationConfig?.responseMimeType).toBe('application/json');
     expect(payload.generationConfig?.responseJsonSchema).toMatchObject({ type: 'object' });
+    expect(payload.generationConfig).toMatchObject({ thinkingConfig: { thinkingLevel: 'HIGH' } });
     expect(payload.tools).toBeUndefined();
+  });
+
+  it('splits thinking settings by model generation and adds high resolution only with an image', () => {
+    expect(thinkingConfigForModel('gemini-3.6-flash')).toEqual({ thinkingLevel: 'HIGH' });
+    expect(thinkingConfigForModel('gemini-2.5-pro')).toEqual({ thinkingBudget: -1 });
+    expect(thinkingConfigForModel('gemini-private-vision')).toBeUndefined();
+
+    const imageRequest = request(false);
+    const imageParts = (imageRequest.contents as { parts: Array<Record<string, unknown>> }).parts;
+    expect(imageParts[1]).toMatchObject({ mediaResolution: { level: 'MEDIA_RESOLUTION_HIGH' } });
+
+    const textRequest = buildAnalysisRequest({
+      model: 'gemini-2.5-pro',
+      prompt: 'text only',
+      systemInstruction: 'system',
+      schema: { type: 'object' },
+    });
+    expect(textRequest.config?.thinkingConfig).toEqual({ thinkingBudget: -1 });
+    expect((textRequest.contents as { parts: Array<Record<string, unknown>> }).parts).toHaveLength(1);
+    expect(textRequest.config).not.toHaveProperty('temperature');
+    expect(textRequest.config).not.toHaveProperty('topP');
+    expect(textRequest.config).not.toHaveProperty('topK');
   });
 
   it('adds code execution without changing the selected model', () => {
@@ -92,6 +119,33 @@ describe('generateContent request contract', () => {
     const generate = vi.fn().mockRejectedValue(Object.assign(new Error('invalid safety setting'), { status: 400 }));
     await expect(callGenerateContentWithRetry(generate, request(), async () => undefined)).rejects.toThrow('invalid safety setting');
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries HTTP 408 but never retries authentication failures', async () => {
+    const success = jsonResponse(finalAnalysis);
+    const timeoutThenSuccess = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('request timeout'), { status: 408 }))
+      .mockResolvedValueOnce(success);
+    await callGenerateContentWithRetry(timeoutThenSuccess, request(), async () => undefined);
+    expect(timeoutThenSuccess).toHaveBeenCalledTimes(2);
+
+    const unauthorized = vi.fn().mockRejectedValue(Object.assign(new Error('bad key'), { status: 401 }));
+    await expect(callGenerateContentWithRetry(unauthorized, request(), async () => undefined)).rejects.toThrow('bad key');
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient finish reasons with the identical request and records every attempt', async () => {
+    const interrupted = jsonResponse(finalAnalysis);
+    interrupted.candidates![0].finishReason = FinishReason.OTHER;
+    const success = jsonResponse(finalAnalysis);
+    const generate = vi.fn().mockResolvedValueOnce(interrupted).mockResolvedValueOnce(success);
+    const outgoing = request();
+    const call = await callGenerateContentWithRetry(generate, outgoing, async () => undefined);
+    expect(generate).toHaveBeenNthCalledWith(1, outgoing);
+    expect(generate).toHaveBeenNthCalledWith(2, outgoing);
+    expect(call.attempts?.map((attempt) => attempt.status)).toEqual(['retrying', 'completed']);
+    const stage = stageReport('test', 'gemini-pro-latest', call, 10, 'DISABLED');
+    expect(stage.usage.totalTokens).toBe(30);
   });
 
   it('maps model, usage, finish reason, prompt feedback, and code execution into the report stage', () => {
@@ -192,5 +246,96 @@ describe('generateContent request contract', () => {
       },
     });
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes a failed harness at the failed stage and permits only the user-selected model to change', async () => {
+    const evidence = {
+      composition: 'composition', subjects: ['subject'], visible_contacts: ['contact'], pose_and_support: ['pose'],
+      materials_and_surface: ['material'], lighting_and_camera: ['light'], uncertainties: [],
+    };
+    const critique = { accepted: ['ok'], corrections: [], unsupported_claims: [], synthesis_rules: ['keep'] };
+    const firstGenerate = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(evidence))
+      .mockRejectedValueOnce(Object.assign(new Error('invalid critic request'), { status: 400 }));
+
+    let resumeState;
+    try {
+      await analyzeImage({
+        apiKey: '', base64: 'AAAA', mimeType: 'image/png', model: 'gemini-pro-latest', pipeline: 'harness', agenticVision: false,
+      }, { generateContent: firstGenerate });
+      throw new Error('expected analysis failure');
+    } catch (error) {
+      expect(error).toMatchObject({ resumeState: { nextStage: 'critic', evidence } });
+      resumeState = (error as { resumeState: NonNullable<Parameters<typeof analyzeImage>[0]['resumeState']> }).resumeState;
+    }
+
+    const resumedGenerate = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(critique))
+      .mockResolvedValueOnce(jsonResponse(finalAnalysis));
+    const output = await analyzeImage({
+      apiKey: '', base64: 'AAAA', mimeType: 'image/png', model: 'gemini-2.5-pro', pipeline: 'harness', agenticVision: false, resumeState,
+    }, { generateContent: resumedGenerate });
+
+    expect(firstGenerate).toHaveBeenCalledTimes(2);
+    expect(resumedGenerate).toHaveBeenCalledTimes(2);
+    expect(resumedGenerate.mock.calls.every(([call]) => call.model === 'gemini-2.5-pro')).toBe(true);
+    expect(output.report.stages.filter((stage) => stage.name === '증거 수집')).toHaveLength(1);
+    expect(output.report.stages.some((stage) => stage.name === '교차 비평' && stage.requestedModel === 'gemini-2.5-pro')).toBe(true);
+  });
+});
+
+describe('public API errors', () => {
+  it('extracts the concise API message from an SDK JSON string', () => {
+    const error = Object.assign(new Error(JSON.stringify({
+      error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' },
+    })), { status: 400 });
+
+    expect(publicApiError(error).message).toBe(
+      'Gemini API 인증 오류 (400): API key not valid. Please pass a valid API key.',
+    );
+  });
+});
+
+describe('Models API catalog', () => {
+  it('follows nextPageToken, deduplicates ids, and excludes specialized models from analysis selection', async () => {
+    const seenUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const outgoing = input instanceof Request ? input : new Request(input, init);
+      seenUrls.push(outgoing.url);
+      const secondPage = outgoing.url.includes('pageToken=NEXT_PAGE');
+      const body = secondPage ? {
+        models: [
+          { name: 'models/gemini-3.6-flash', displayName: 'duplicate', supportedGenerationMethods: ['generateContent'] },
+          { name: 'models/gemini-3.1-flash-live-preview', displayName: 'Live', supportedGenerationMethods: ['generateContent'] },
+          { name: 'models/gemini-3.1-pro-preview-customtools', displayName: 'Custom Tools', supportedGenerationMethods: ['generateContent'] },
+        ],
+      } : {
+        models: [
+          { name: 'models/gemini-3.6-flash', displayName: 'Flash', supportedGenerationMethods: ['generateContent'] },
+          { name: 'models/gemini-embedding-001', displayName: 'Embedding', supportedGenerationMethods: ['embedContent'] },
+        ],
+        nextPageToken: 'NEXT_PAGE',
+      };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+
+    const models = await listAvailableModels('TEST_KEY_ONLY');
+    expect(seenUrls).toHaveLength(2);
+    expect(seenUrls[1]).toContain('pageToken=NEXT_PAGE');
+    expect(seenUrls.every((url) => !/[?&]key=/.test(url))).toBe(true);
+    expect(models.filter((model) => model.id === 'gemini-3.6-flash')).toHaveLength(1);
+    expect(models.find((model) => model.id === 'gemini-3.1-pro-preview-customtools')).toMatchObject({ task: 'analysis', selectable: true, source: 'api' });
+    expect(models.find((model) => model.id === 'gemini-3.1-flash-live-preview')).toMatchObject({ task: 'specialized', selectable: false });
+  });
+
+  it('classifies only analysis-capable generateContent families as selectable analysis models', () => {
+    expect(classifyModel('gemini-3.6-flash', '', ['generateContent'])).toEqual({ task: 'analysis', selectable: true });
+    expect(classifyModel('gemini-3.1-flash-image', '', ['generateContent'])).toEqual({ task: 'image', selectable: true });
+    for (const id of [
+      'gemini-3.1-flash-live-preview', 'gemini-3.1-flash-tts-preview', 'gemini-embedding-001',
+      'gemini-robotics-er-2-preview', 'gemini-2.5-computer-use-preview', 'gemini-omni-flash',
+    ]) {
+      expect(classifyModel(id, '', ['generateContent'])).toEqual({ task: 'specialized', selectable: false });
+    }
   });
 });

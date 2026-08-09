@@ -53,8 +53,8 @@ export function WorkspaceSlot({
   const [dragging, setDragging] = useState(false);
   const [copied, setCopied] = useState<'analysis' | 'prompt' | null>(null);
 
-  const runAnalysis = async (base64: string, mimeType: string) => {
-    onUpdate(slot.id, { status: 'analyzing', error: null, report: null });
+  const runAnalysis = async (base64: string, mimeType: string, resumeState: Slot['resumeState'] = null) => {
+    onUpdate(slot.id, { status: 'analyzing', error: null, report: null, resumeState });
     try {
       const output = await analyzeImage({
         apiKey,
@@ -63,6 +63,7 @@ export function WorkspaceSlot({
         model: settings.analysisModel,
         pipeline,
         agenticVision: settings.agenticVision,
+        resumeState,
       });
       const completed: Slot = {
         ...slot,
@@ -80,6 +81,7 @@ export function WorkspaceSlot({
         status: 'saving',
         error: null,
         savedHistoryId: null,
+        resumeState: null,
       };
       onUpdate(slot.id, completed);
       const id = await onSave(completed, 'analysis');
@@ -88,7 +90,7 @@ export function WorkspaceSlot({
       onUpdate(slot.id, {
         status: 'error',
         error: error instanceof Error ? error.message : '분석에 실패했습니다.',
-        ...(error instanceof AnalysisRunError ? { report: error.report } : {}),
+        ...(error instanceof AnalysisRunError ? { report: error.report, resumeState: error.resumeState } : { resumeState: null }),
       });
     }
   };
@@ -107,6 +109,7 @@ export function WorkspaceSlot({
         analysisText: '',
         currentPrompt: '',
         savedHistoryId: null,
+        resumeState: null,
         status: 'analyzing',
         error: null,
       });
@@ -381,8 +384,8 @@ export function WorkspaceSlot({
             <button
               className="text-action"
               disabled={busy}
-              onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png')}
-            ><RefreshCw size={13} /> 수동 재시도</button>
+              onClick={() => void runAnalysis(slot.originalImage!, slot.originalMimeType || 'image/png', slot.resumeState)}
+            ><RefreshCw size={13} /> {slot.resumeState ? '실패 단계부터 재시도' : '수동 재시도'}</button>
           )}
           <button aria-label="오류 닫기" onClick={() => onUpdate(slot.id, { error: null, status: 'idle' })}><X size={15} /></button>
         </div>

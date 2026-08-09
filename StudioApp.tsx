@@ -12,6 +12,7 @@ import type {
 } from './types';
 import {
   createCompareSession,
+  createCustomModel,
   createPipelineSession,
   createSettings,
   mergeModels,
@@ -25,6 +26,7 @@ export default function StudioApp() {
   const [settings, setSettings] = useState<AppSettings>(() => createSettings());
   const [models, setModels] = useState<ModelOption[]>(FALLBACK_MODELS);
   const [modelRefreshState, setModelRefreshState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [modelRefreshError, setModelRefreshError] = useState('');
   const [workspaceSessions, setWorkspaceSessions] = useState<Record<'standard' | 'harness', PipelineWorkspaceSession>>(() => ({
     standard: createPipelineSession(),
     harness: createPipelineSession(),
@@ -54,16 +56,24 @@ export default function StudioApp() {
 
   const refreshModels = useCallback(async (): Promise<number> => {
     setModelRefreshState('loading');
+    setModelRefreshError('');
     try {
       const live = await listAvailableModels(apiKey);
-      setModels(mergeModels(live));
+      setModels((current) => mergeModels(live.concat(current.filter((model) => model.source === 'custom'))));
       setModelRefreshState('idle');
       return live.length;
     } catch (error) {
       setModelRefreshState('error');
+      setModelRefreshError(error instanceof Error ? error.message : '모델 목록을 불러오지 못했습니다.');
       throw error;
     }
   }, [apiKey]);
+
+  const addCustomModel = useCallback((value: string): string => {
+    const custom = createCustomModel(value);
+    setModels((current) => mergeModels(current.concat(custom)));
+    return custom.id;
+  }, []);
 
   const updateWorkspaceSession = useCallback((updater: SetStateAction<PipelineWorkspaceSession>) => {
     if (view === 'compare') return;
@@ -85,6 +95,7 @@ export default function StudioApp() {
         models={models}
         modelRefreshState={modelRefreshState}
         onRefreshModels={refreshModels}
+        onAddCustomModel={addCustomModel}
         session={compareSession}
         onSessionChange={setCompareSession}
       />
@@ -102,7 +113,9 @@ export default function StudioApp() {
       onSettingsChange={setSettings}
       models={models}
       modelRefreshState={modelRefreshState}
+      modelRefreshError={modelRefreshError}
       onRefreshModels={refreshModels}
+      onAddCustomModel={addCustomModel}
       session={workspaceSessions[view]}
       onSessionChange={updateWorkspaceSession}
     />

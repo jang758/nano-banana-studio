@@ -37,7 +37,9 @@ interface Props {
   onSettingsChange: (settings: AppSettings) => void;
   models: ModelOption[];
   modelRefreshState: 'idle' | 'loading' | 'error';
+  modelRefreshError: string;
   onRefreshModels: () => Promise<number>;
+  onAddCustomModel: (value: string) => string;
   session: PipelineWorkspaceSession;
   onSessionChange: Dispatch<SetStateAction<PipelineWorkspaceSession>>;
 }
@@ -52,7 +54,9 @@ export default function App({
   onSettingsChange,
   models,
   modelRefreshState,
+  modelRefreshError,
   onRefreshModels,
+  onAddCustomModel,
   session,
   onSessionChange,
 }: Props) {
@@ -154,6 +158,7 @@ export default function App({
       savedHistoryId: item.id,
       status: 'idle',
       error: null,
+      resumeState: null,
     });
     setHistoryOpen(false);
   }, [slots, updateSlot]);
@@ -284,11 +289,13 @@ export default function App({
         onApiKeyChange={onApiKeyChange}
         models={models}
         modelRefreshState={modelRefreshState}
+        modelRefreshError={modelRefreshError}
         onRefreshModels={() => {
           void onRefreshModels()
             .then((count) => setNotice(`API가 제공한 모델 ${count}개를 불러왔습니다.`))
             .catch((error) => setNotice(error instanceof Error ? error.message : '모델 목록을 불러오지 못했습니다.'));
         }}
+        onAddCustomModel={onAddCustomModel}
       />
       <ImageModal data={modalData} onClose={() => setModalData(null)} />
     </div>

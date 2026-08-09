@@ -59,11 +59,34 @@ Runs the original analysis and the new harness with the same image, model, and A
 
 ### Analysis model
 
-Select the model used for image analysis. The default is `gemini-pro-latest`.
+Select the model used for image analysis. The intelligence-first default is `gemini-pro-latest`. The app uses the selected model unchanged for every analysis stage, including evidence gathering, critique, and synthesis. It never silently routes a stage to another model.
+
+The following 12 analysis models are available in the default list at startup:
+
+- `gemini-pro-latest`
+- `gemini-3.1-pro-preview`
+- `gemini-3.6-flash`
+- `gemini-3.5-flash`
+- `gemini-3.5-flash-lite`
+- `gemini-3-flash-preview`
+- `gemini-3.1-flash-lite`
+- `gemini-flash-latest`
+- `gemini-flash-lite-latest`
+- `gemini-2.5-pro`
+- `gemini-2.5-flash`
+- `gemini-2.5-flash-lite`
+
+Each option is labeled by source as `[기본]` (default), `[계정]` (account), or `[Custom]`.
+
+- `[기본]`: the built-in list that remains available before an API lookup.
+- `[계정]`: models returned for the current API key after selecting `API 모델 전체 새로고침`. The app reads every Models API page, merges duplicates, and keeps Gemini models that support `generateContent`. Image generation, Veo, TTS, Live/Audio, Embedding, Robotics/Computer Use, Gemma/Lyria, and dedicated Agent families are excluded from the analysis selector.
+- `[Custom]`: enter a model name under `Custom Model ID`, then select `추가·선택`. A leading `models/` prefix is removed automatically. If the account cannot use that model, the app displays the API error and does not fall back to another model.
+
+If model discovery fails, the built-in list and existing Custom entries remain available, and the failure reason is displayed in Settings.
 
 ### Allow code-based detailed inspection
 
-Allows Agentic Vision. When enabled, the model may run zoom, coordinate, or pixel inspections when needed. Check the analysis report to see whether it was actually used and how many inspections ran.
+Allows Agentic Vision. When enabled, the model may run zoom, coordinate, or pixel inspections when needed. The selected analysis model does not change. Check the analysis report to see whether it was actually used and how many inspections ran.
 
 ### Image-generation model
 
@@ -131,9 +154,9 @@ Use the buttons over the generated image to enlarge or download it.
 
 Each side displays its generation prompt, Korean analysis specifications, elapsed time, tokens, estimated cost, and analysis report. Each successful result is saved to History separately.
 
-- If one side fails, use `이 분석만 재시도` to rerun only that analysis method.
+- If one side fails, use `실패 단계부터 재시도` to rerun only its failed stage and downstream stages. You may select another model first; previously successful stages are not called again.
 - Use `비교 리포트 .md 저장` to save both reports in one Markdown file.
-- Changing the analysis model or Agentic Vision setting clears the previous comparison results.
+- Changing the model clears completed comparison results but preserves a resumable failure checkpoint. Changing Agentic Vision clears both results and checkpoints because it changes the analysis conditions.
 
 ## 10. Analysis report
 
@@ -144,7 +167,7 @@ Expand `분석 실행 리포트` in a workspace or comparison result to view:
 - selected model and the model version returned by the API;
 - whether Agentic Vision was requested and actually used;
 - inspection count, area, purpose, and result;
-- duration and API attempt count for each stage;
+- each stage's duration and every API attempt's model, duration, and outcome;
 - input, output, thought, and tool-use tokens;
 - total estimated cost and the directly attributed Agentic Vision estimate;
 - finish reason, prompt block reason, and failure reason.
@@ -168,8 +191,10 @@ Each ZIP record can include the source and generated images, prompt, analysis te
 
 ## 12. Errors and retries
 
-- Temporary network, server, and quota failures are retried up to two times after the initial request.
-- Invalid request, authentication, model, and Safety errors are not repeatedly retried; the returned error detail is shown instead.
-- Use `수동 재시도` in an analysis error banner to rerun the current image.
-- On the Compare screen, retry only the failed analysis method when needed.
+- Temporary network failures, HTTP 408/429/5xx responses, and transient generation stops are retried up to two times after the initial request.
+- Automatic retries keep the same model, image, and request settings.
+- HTTP 400/401/403 and other non-transient request or authentication failures stop immediately and display the returned reason.
+- Original Analysis retries its only analysis stage. The New Harness uses `실패 단계부터 재시도` to keep successful earlier stages and resume at the failed stage.
+- Before a New Harness or Compare retry, you may explicitly choose another model. The new selection applies only to the failed and downstream stages; there is no automatic model fallback.
+- Failed calls remain in the report with their attempt count, duration, model, returned token usage when available, finish reason, and error reason.
 - If the selected model does not support Agentic Vision, disable detailed inspection or choose a supporting model and retry.

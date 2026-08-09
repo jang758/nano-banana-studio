@@ -17,7 +17,7 @@ type Price = {
 };
 
 // Google Gemini Developer API Standard paid-tier price per 1M tokens.
-// Snapshot date: https://ai.google.dev/gemini-api/docs/pricing (2026-07-21).
+// Snapshot date: https://ai.google.dev/gemini-api/docs/pricing (2026-08-09).
 const PRICE_TABLE: Record<string, Price> = {
   'gemini-pro-latest': { input: 2, output: 12, largeInput: 4, largeOutput: 18 },
   'gemini-3-pro-preview': { input: 2, output: 12, largeInput: 4, largeOutput: 18 },
@@ -27,6 +27,9 @@ const PRICE_TABLE: Record<string, Price> = {
   'gemini-3.5-flash': { input: 1.5, output: 9 },
   'gemini-3.5-flash-lite': { input: 0.3, output: 2.5 },
   'gemini-3.1-flash-lite': { input: 0.25, output: 1.5 },
+  'gemini-3-flash-preview': { input: 0.5, output: 3 },
+  'gemini-flash-latest': { input: 1.5, output: 9 },
+  'gemini-flash-lite-latest': { input: 0.3, output: 2.5 },
   'gemini-2.5-pro': { input: 1.25, output: 10, largeInput: 2.5, largeOutput: 15 },
   'gemini-2.5-flash': { input: 0.3, output: 2.5 },
   'gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
@@ -60,7 +63,7 @@ export function estimateCost(stages: AnalysisStageReport[]): CostEstimate {
         totalUsd: null,
         agenticAttributedUsd: null,
         pricingModel: null,
-        pricingAsOf: '2026-07-21',
+        pricingAsOf: '2026-08-09',
         note: '선택 모델의 공식 단가를 로컬 가격표에서 확인할 수 없어 비용을 산정하지 않았습니다. 토큰 사용량은 확정값입니다.',
       };
     }
@@ -79,7 +82,7 @@ export function estimateCost(stages: AnalysisStageReport[]): CostEstimate {
     totalUsd: total,
     agenticAttributedUsd: agenticAttributed,
     pricingModel: [...pricingModels].join(', '),
-    pricingAsOf: '2026-07-21',
+    pricingAsOf: '2026-08-09',
     note: 'Standard 유료 티어 기준 추정액입니다. 무료 티어·캐시·계정 계약은 반영하지 않습니다. Agentic Vision 금액은 API가 별도로 노출한 tool-use 입력 토큰의 직접 귀속분이며, 생성 코드/실행 결과 중 일반 출력과 분리되지 않는 토큰은 포함하지 않습니다.',
   };
 }
@@ -123,7 +126,8 @@ export function formatAnalysisReport(report: AnalysisReport): string {
     '',
     ...report.stages.flatMap((stage, index) => [
       `### ${index + 1}. ${stage.name}`,
-      `- 모델: ${stage.resolvedModel || stage.requestedModel}`,
+      `- 요청 모델: ${stage.requestedModel}`,
+      `- API 응답 모델: ${stage.resolvedModel || '확인 불가'}`,
       `- 상태: ${stage.status}`,
       `- API 시도 횟수: ${stage.attemptCount ?? 1}`,
       `- 종료 사유: ${stage.finishReason || '없음'}`,
@@ -132,6 +136,15 @@ export function formatAnalysisReport(report: AnalysisReport): string {
       `- 토큰: 입력 ${stage.usage.inputTokens}, 출력 ${stage.usage.outputTokens}, 생각 ${stage.usage.thoughtTokens}, 도구 ${stage.usage.toolUseTokens}`,
       `- Agentic Vision: ${stage.agenticVisionStatus}`,
       ...(stage.retryReasons?.length ? stage.retryReasons.map((reason, retryIndex) => `- 자동 재시도 ${retryIndex + 1}: ${reason}`) : []),
+      ...(stage.attempts?.length ? [
+        '',
+        '#### API 시도 기록',
+        ...stage.attempts.flatMap((attempt) => [
+          `- 시도 ${attempt.attempt}: ${attempt.status} / ${(attempt.durationMs / 1000).toFixed(2)}초 / 요청 ${attempt.requestedModel} / 응답 ${attempt.resolvedModel || '없음'}`,
+          `  - 종료: ${attempt.finishReason || '없음'}, 차단: ${attempt.promptBlockReason || '없음'}, 토큰: ${attempt.usage.totalTokens}`,
+          ...(attempt.error ? [`  - 오류: ${attempt.error}`] : []),
+        ]),
+      ] : []),
       '',
     ]),
   ];

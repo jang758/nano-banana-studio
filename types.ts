@@ -10,6 +10,7 @@ export type AgenticVisionStatus =
 
 export type AspectRatio = '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
 export type ImageSize = '1K' | '2K' | '4K';
+export type ModelSource = 'default' | 'api' | 'custom';
 
 export interface ModelOption {
   id: string;
@@ -20,6 +21,7 @@ export interface ModelOption {
   outputTokenLimit?: number;
   task: 'analysis' | 'image' | 'specialized';
   selectable: boolean;
+  source: ModelSource;
 }
 
 export interface AppSettings {
@@ -101,6 +103,19 @@ export interface AgenticInspection {
   status: 'ok' | 'failed' | 'unknown';
 }
 
+export interface AnalysisAttemptReport {
+  attempt: number;
+  requestedModel: string;
+  resolvedModel: string;
+  durationMs: number;
+  status: 'completed' | 'retrying' | 'failed';
+  usage: TokenUsageSummary;
+  finishReason?: string | null;
+  promptBlockReason?: string | null;
+  error?: string;
+  inspections: AgenticInspection[];
+}
+
 export interface AnalysisStageReport {
   name: string;
   requestedModel: string;
@@ -114,6 +129,19 @@ export interface AnalysisStageReport {
   retryReasons?: string[];
   finishReason?: string | null;
   promptBlockReason?: string | null;
+  attempts?: AnalysisAttemptReport[];
+}
+
+export type AnalysisResumeStage = 'standard' | 'evidence' | 'critic' | 'synthesis';
+
+export interface AnalysisResumeState {
+  pipeline: AnalysisPipeline;
+  agenticVision: boolean;
+  nextStage: AnalysisResumeStage;
+  stages: AnalysisStageReport[];
+  evidence?: HarnessEvidence;
+  critique?: HarnessCritique;
+  totalDurationMs: number;
 }
 
 export interface CostEstimate {
@@ -173,6 +201,7 @@ export interface WorkspaceSlot {
   trace: AnalysisTrace | null;
   report: AnalysisReport | null;
   savedHistoryId: string | null;
+  resumeState: AnalysisResumeState | null;
 }
 
 export interface PipelineWorkspaceSession {
@@ -186,6 +215,7 @@ export interface CompareSideState {
   error: string | null;
   historyId: string | null;
   saveError: string | null;
+  resumeState: AnalysisResumeState | null;
 }
 
 export interface CompareSession {

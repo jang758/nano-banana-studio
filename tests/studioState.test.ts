@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { FALLBACK_MODELS } from '../constants';
 import {
   createCompareSession,
+  createCustomModel,
   createPipelineSession,
   mergeModels,
+  normalizeModelId,
   pathForStudioView,
   studioViewFromPath,
 } from '../utils/studioState';
@@ -41,9 +43,25 @@ describe('mergeModels', () => {
       ...FALLBACK_MODELS[0],
       displayName: 'Live Pro Alias',
       description: 'live',
+      source: 'api' as const,
     };
     const merged = mergeModels([live]);
     expect(merged.find((model) => model.id === live.id)?.displayName).toBe('Live Pro Alias');
     expect(merged).toHaveLength(FALLBACK_MODELS.length);
+  });
+
+  it('ships twelve analysis defaults and puts a custom model first', () => {
+    expect(FALLBACK_MODELS.filter((model) => model.task === 'analysis')).toHaveLength(12);
+    const custom = createCustomModel('models/gemini-private-vision');
+    const merged = mergeModels([custom]);
+    expect(merged.filter((model) => model.task === 'analysis')[0]).toMatchObject({
+      id: 'gemini-private-vision',
+      source: 'custom',
+    });
+  });
+
+  it('normalizes custom ids without rewriting aliases and rejects unrelated ids', () => {
+    expect(normalizeModelId(' models/gemini-pro-latest ')).toBe('gemini-pro-latest');
+    expect(() => normalizeModelId('veo-3.1')).toThrow('gemini-');
   });
 });

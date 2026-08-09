@@ -26,6 +26,23 @@ const stage: AnalysisStageReport = {
     resultExcerpt: '손가락 경계 확인',
     status: 'ok',
   }],
+  attempts: [{
+    attempt: 1,
+    requestedModel: 'gemini-pro-latest',
+    resolvedModel: 'gemini-3.1-pro-preview',
+    durationMs: 1250,
+    status: 'completed',
+    usage: {
+      inputTokens: 1_000,
+      outputTokens: 100,
+      thoughtTokens: 50,
+      toolUseTokens: 200,
+      cachedTokens: 0,
+      totalTokens: 1_150,
+    },
+    finishReason: 'STOP',
+    inspections: [],
+  }],
 };
 
 describe('analysis report', () => {
@@ -63,6 +80,8 @@ describe('analysis report', () => {
     expect(text).toContain('정밀검사 횟수: 1');
     expect(text).toContain('이미지 좌표 (10, 20)–(100, 120)');
     expect(text).toContain('안전 정책으로 거절됨');
+    expect(text).toContain('API 시도 기록');
+    expect(text).toContain('응답 gemini-3.1-pro-preview');
   });
 
   it('returns a structured in-app report when analysis cannot start', async () => {

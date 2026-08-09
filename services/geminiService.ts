@@ -3,6 +3,8 @@ import {
   GoogleGenAI,
   HarmBlockThreshold,
   HarmCategory,
+  PartMediaResolutionLevel,
+  ThinkingLevel,
   Outcome,
   type GenerateContentConfig,
   type GenerateContentParameters,
@@ -20,9 +22,11 @@ import {
 import type {
   AgenticVisionStatus,
   AgenticInspection,
+  AnalysisAttemptReport,
   AnalysisOutput,
   AnalysisPipeline,
   AnalysisReport,
+  AnalysisResumeState,
   AnalysisResult,
   AnalysisStageReport,
   AppSettings,
@@ -31,7 +35,7 @@ import type {
   ModelOption,
   TokenUsageSummary,
 } from '../types';
-import { addUsage, estimateCost } from '../utils/analysisReport';
+import { addUsage, EMPTY_USAGE, estimateCost } from '../utils/analysisReport';
 
 const analysisShape = {
   face: z.string(),
@@ -168,18 +172,34 @@ export const MAX_API_ATTEMPTS = 3;
 
 const imagePart = (base64: string, mimeType: string) => ({
   inlineData: { data: base64, mimeType },
+  mediaResolution: { level: PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH },
 });
 
+export function thinkingConfigForModel(model: string): GenerateContentConfig['thinkingConfig'] | undefined {
+  const id = model.trim().replace(/^models\//i, '').toLowerCase();
+  if (/^gemini-2\.5(?:-|$)/.test(id)) return { thinkingBudget: -1 };
+  if (/^gemini-3(?:[.-]|$)/.test(id)
+    || id === 'gemini-pro-latest'
+    || id === 'gemini-flash-latest'
+    || id === 'gemini-flash-lite-latest') {
+    return { thinkingLevel: ThinkingLevel.HIGH };
+  }
+  return undefined;
+}
+
 function structuredConfig(
+  model: string,
   systemInstruction: string,
   schema: Record<string, unknown>,
   agenticVision: boolean,
 ): GenerateContentConfig {
+  const thinkingConfig = thinkingConfigForModel(model);
   return {
     systemInstruction,
     responseMimeType: 'application/json',
     responseJsonSchema: schema,
     safetySettings: SAFETY_SETTINGS,
+    ...(thinkingConfig ? { thinkingConfig } : {}),
     ...(agenticVision ? { tools: [{ codeExecution: {} }] } : {}),
   };
 }
@@ -200,7 +220,7 @@ export function buildAnalysisRequest(options: {
   return {
     model: options.model,
     contents: { parts },
-    config: structuredConfig(options.systemInstruction, options.schema, options.agenticVision === true),
+    config: structuredConfig(options.model, options.systemInstruction, options.schema, options.agenticVision === true),
   };
 }
 
@@ -260,6 +280,15 @@ function apiErrorMessage(error: unknown): string {
       // JSON 본문이 아니면 SDK 메시지를 사용한다.
     }
   }
+  const jsonStart = message.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const payload = JSON.parse(message.slice(jsonStart)) as { error?: { message?: unknown } };
+      if (typeof payload.error?.message === 'string' && payload.error.message.trim()) message = payload.error.message;
+    } catch {
+      // SDK 메시지 안에 완전한 JSON 오류 본문이 없으면 원래 메시지를 사용한다.
+    }
+  }
   return message
     .replace(/AIza[A-Za-z0-9_-]+/g, '[REDACTED]')
     .replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED]');
@@ -295,7 +324,7 @@ function failureCategory(message: string): FailureCategory {
 
 function isRetryableApiError(error: unknown): boolean {
   const status = apiErrorStatus(error);
-  if (status === 429 || (status !== null && status >= 500)) return true;
+  if (status === 408 || status === 429 || (status !== null && status >= 500)) return true;
   return /failed to fetch|network.?error|econnreset|etimedout|timeout|연결.*(실패|끊)/i.test(apiErrorMessage(error));
 }
 
@@ -303,25 +332,130 @@ export interface GenerateContentAttemptResult {
   response: GenerateContentResponse;
   attemptCount: number;
   retryReasons: string[];
+  attempts?: AnalysisAttemptReport[];
 }
 
 export type GenerateContentInvoker = (request: GenerateContentParameters) => Promise<GenerateContentResponse>;
+
+class GenerateContentCallError extends Error {
+  readonly status?: number;
+  readonly attempts: AnalysisAttemptReport[];
+  readonly retryReasons: string[];
+
+  constructor(error: unknown, attempts: AnalysisAttemptReport[], retryReasons: string[]) {
+    super(apiErrorMessage(error));
+    this.name = 'GenerateContentCallError';
+    this.status = apiErrorStatus(error) ?? undefined;
+    this.attempts = attempts;
+    this.retryReasons = retryReasons;
+  }
+}
+
+function retryableFinishReason(response: GenerateContentResponse): boolean {
+  const reason = responseFinishReason(response);
+  return reason === FinishReason.OTHER
+    || reason === FinishReason.MALFORMED_FUNCTION_CALL
+    || reason === FinishReason.UNEXPECTED_TOOL_CALL;
+}
+
+function responseFailureMessage(response: GenerateContentResponse): string | null {
+  const promptBlock = responsePromptBlockReason(response);
+  if (promptBlock) {
+    const detail = response.promptFeedback?.blockReasonMessage;
+    return `요청 차단: ${promptBlock}${detail ? ` - ${detail}` : ''}`;
+  }
+  const finishReason = responseFinishReason(response);
+  if (finishReason && finishReason !== FinishReason.STOP) {
+    const detail = response.candidates?.[0]?.finishMessage;
+    return `응답 중단: ${finishReason}${detail ? ` - ${detail}` : ''}`;
+  }
+  return null;
+}
+
+function responseAttempt(
+  response: GenerateContentResponse,
+  request: GenerateContentParameters,
+  attempt: number,
+  durationMs: number,
+  status: AnalysisAttemptReport['status'],
+  error?: string,
+): AnalysisAttemptReport {
+  return {
+    attempt,
+    requestedModel: String(request.model),
+    resolvedModel: response.modelVersion || String(request.model),
+    durationMs,
+    status,
+    usage: usageFromResponse(response),
+    finishReason: responseFinishReason(response),
+    promptBlockReason: responsePromptBlockReason(response),
+    ...(error ? { error } : {}),
+    inspections: inspectionsFromResponse(response),
+  };
+}
+
+function errorAttempt(
+  error: unknown,
+  request: GenerateContentParameters,
+  attempt: number,
+  durationMs: number,
+  status: AnalysisAttemptReport['status'],
+): AnalysisAttemptReport {
+  return {
+    attempt,
+    requestedModel: String(request.model),
+    resolvedModel: '',
+    durationMs,
+    status,
+    usage: { ...EMPTY_USAGE },
+    error: publicApiError(error).message,
+    inspections: [],
+  };
+}
 
 export async function callGenerateContentWithRetry(
   generate: GenerateContentInvoker,
   request: GenerateContentParameters,
   wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  onProgress?: (attemptCount: number, retryReasons: string[]) => void,
+  onProgress?: (attemptCount: number, retryReasons: string[], attempts: AnalysisAttemptReport[]) => void,
 ): Promise<GenerateContentAttemptResult> {
   const retryReasons: string[] = [];
+  const attempts: AnalysisAttemptReport[] = [];
   for (let attempt = 1; attempt <= MAX_API_ATTEMPTS; attempt += 1) {
-    onProgress?.(attempt, [...retryReasons]);
+    onProgress?.(attempt, [...retryReasons], [...attempts]);
+    const attemptStarted = performance.now();
     try {
-      return { response: await generate(request), attemptCount: attempt, retryReasons };
+      const response = await generate(request);
+      const failure = responseFailureMessage(response);
+      const willRetry = Boolean(failure) && retryableFinishReason(response) && attempt < MAX_API_ATTEMPTS;
+      attempts.push(responseAttempt(
+        response,
+        request,
+        attempt,
+        Math.round(performance.now() - attemptStarted),
+        failure ? (willRetry ? 'retrying' : 'failed') : 'completed',
+        failure ?? undefined,
+      ));
+      if (!willRetry) {
+        onProgress?.(attempt, [...retryReasons], [...attempts]);
+        return { response, attemptCount: attempt, retryReasons, attempts };
+      }
+      retryReasons.push(failure!);
+      onProgress?.(attempt, [...retryReasons], [...attempts]);
+      await wait(attempt * 500);
     } catch (error) {
-      if (attempt === MAX_API_ATTEMPTS || !isRetryableApiError(error)) throw error;
+      const willRetry = attempt < MAX_API_ATTEMPTS && isRetryableApiError(error);
+      attempts.push(errorAttempt(
+        error,
+        request,
+        attempt,
+        Math.round(performance.now() - attemptStarted),
+        willRetry ? 'retrying' : 'failed',
+      ));
+      onProgress?.(attempt, [...retryReasons], [...attempts]);
+      if (!willRetry) throw new GenerateContentCallError(error, attempts, retryReasons);
       retryReasons.push(publicApiError(error).message);
-      onProgress?.(attempt, [...retryReasons]);
+      onProgress?.(attempt, [...retryReasons], [...attempts]);
       await wait(attempt * 500);
     }
   }
@@ -381,10 +515,19 @@ function inspectionsFromResponse(response: GenerateContentResponse): AgenticInsp
   });
 }
 
-function readAgenticStatus(response: GenerateContentResponse): AgenticVisionStatus {
-  const inspections = inspectionsFromResponse(response);
+function readAgenticStatusFromAttempts(attempts: AnalysisAttemptReport[]): AgenticVisionStatus {
+  const inspections = attempts.flatMap((attempt) => attempt.inspections);
   if (!inspections.length) return 'AVAILABLE_NOT_USED';
   return inspections.some((inspection) => inspection.status !== 'ok') ? 'USED_FAILED' : 'USED_OK';
+}
+
+function aggregateAgenticStatus(stages: AnalysisStageReport[], requested: boolean): AgenticVisionStatus {
+  if (!requested) return 'DISABLED';
+  const statuses = stages.map((stage) => stage.agenticVisionStatus);
+  if (statuses.includes('UNSUPPORTED')) return 'UNSUPPORTED';
+  if (statuses.includes('USED_FAILED')) return 'USED_FAILED';
+  if (statuses.includes('USED_OK')) return 'USED_OK';
+  return 'AVAILABLE_NOT_USED';
 }
 
 function responseFinishReason(response: GenerateContentResponse): string | null {
@@ -416,6 +559,14 @@ export function stageReport(
   agenticVisionStatus: AgenticVisionStatus,
 ): AnalysisStageReport {
   const { response } = call;
+  const attempts = call.attempts ?? [responseAttempt(
+    response,
+    { model: requestedModel, contents: '' },
+    call.attemptCount,
+    durationMs,
+    responseFailureMessage(response) ? 'failed' : 'completed',
+    responseFailureMessage(response) ?? undefined,
+  )];
   const promptBlockReason = responsePromptBlockReason(response);
   const finishReason = responseFinishReason(response);
   return {
@@ -424,13 +575,14 @@ export function stageReport(
     resolvedModel: response.modelVersion || requestedModel,
     durationMs,
     status: promptBlockReason ? `PROMPT_${promptBlockReason}` : finishReason || 'COMPLETED',
-    usage: usageFromResponse(response),
+    usage: addUsage(attempts.map((attempt) => attempt.usage)),
     agenticVisionStatus,
-    inspections: inspectionsFromResponse(response),
+    inspections: attempts.flatMap((attempt) => attempt.inspections),
     attemptCount: call.attemptCount,
     retryReasons: call.retryReasons,
     finishReason,
     promptBlockReason,
+    attempts,
   };
 }
 
@@ -453,7 +605,7 @@ function completedReport(options: {
     apiMethod: 'generateContent',
     safetyMode: 'EXPLICIT_OFF',
     requestedModel: options.requestedModel,
-    resolvedModels: [...new Set(options.stages.map((stage) => stage.resolvedModel))],
+    resolvedModels: [...new Set(options.stages.map((stage) => stage.resolvedModel).filter(Boolean))],
     agenticVisionRequested: options.agenticVisionRequested,
     agenticVisionStatus: options.agenticVisionStatus,
     inspections,
@@ -467,11 +619,13 @@ function completedReport(options: {
 
 export class AnalysisRunError extends Error {
   readonly report: AnalysisReport;
+  readonly resumeState: AnalysisResumeState | null;
 
-  constructor(message: string, report: AnalysisReport) {
+  constructor(message: string, report: AnalysisReport, resumeState: AnalysisResumeState | null = null) {
     super(message);
     this.name = 'AnalysisRunError';
     this.report = report;
+    this.resumeState = resumeState;
   }
 }
 
@@ -481,6 +635,47 @@ interface RunTracker {
   agenticVisionStatus: AgenticVisionStatus;
   attemptCount: number;
   retryReasons: string[];
+  currentAttempts: AnalysisAttemptReport[];
+  stageRecorded: boolean;
+  evidence?: HarnessEvidence;
+  critique?: HarnessCritique;
+  previousDurationMs: number;
+}
+
+function beginStage(tracker: RunTracker, name: string) {
+  tracker.stage = name;
+  tracker.attemptCount = 0;
+  tracker.retryReasons = [];
+  tracker.currentAttempts = [];
+  tracker.stageRecorded = false;
+}
+
+function failedStageReport(tracker: RunTracker, requestedModel: string): AnalysisStageReport {
+  const attempts = tracker.currentAttempts;
+  const lastAttempt = attempts.at(-1);
+  const inspections = attempts.flatMap((attempt) => attempt.inspections);
+  return {
+    name: tracker.stage,
+    requestedModel,
+    resolvedModel: lastAttempt?.resolvedModel || '',
+    durationMs: attempts.reduce((total, attempt) => total + attempt.durationMs, 0),
+    status: lastAttempt?.finishReason || 'ERROR',
+    usage: addUsage(attempts.map((attempt) => attempt.usage)),
+    agenticVisionStatus: tracker.agenticVisionStatus,
+    inspections,
+    attemptCount: tracker.attemptCount,
+    retryReasons: tracker.retryReasons,
+    finishReason: lastAttempt?.finishReason,
+    promptBlockReason: lastAttempt?.promptBlockReason,
+    attempts,
+  };
+}
+
+function nextResumeStage(pipeline: AnalysisPipeline, stage: string): AnalysisResumeState['nextStage'] {
+  if (pipeline === 'standard') return 'standard';
+  if (stage === '교차 비평') return 'critic';
+  if (stage === '최종 합성') return 'synthesis';
+  return 'evidence';
 }
 
 async function runGenerateContentStage(
@@ -493,13 +688,16 @@ async function runGenerateContentStage(
     generate,
     request,
     undefined,
-    (attemptCount, retryReasons) => {
+    (attemptCount, retryReasons, attempts) => {
       tracker.attemptCount = attemptCount;
       tracker.retryReasons = retryReasons;
+      tracker.currentAttempts = attempts;
     },
   );
-  const status = agenticVision ? readAgenticStatus(call.response) : 'DISABLED';
-  tracker.agenticVisionStatus = status;
+  const status = agenticVision
+    ? readAgenticStatusFromAttempts(call.attempts ?? [])
+    : 'DISABLED';
+  if (agenticVision) tracker.agenticVisionStatus = status;
   return { call, status };
 }
 
@@ -512,7 +710,7 @@ async function analyzeStandard(
   tracker: RunTracker,
 ): Promise<AnalysisOutput> {
   const started = performance.now();
-  tracker.stage = '기존 1회 분석';
+  beginStage(tracker, '기존 1회 분석');
   const callStarted = performance.now();
   const { call, status } = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
@@ -531,9 +729,10 @@ async function analyzeStandard(
     status,
   );
   tracker.stages.push(reportStage);
+  tracker.stageRecorded = true;
   assertGenerateContentCompleted(call.response, tracker.stage);
   const result = parseJson(call.response.text, analysisResultSchema, '기존 분석');
-  const totalDurationMs = Math.round(performance.now() - started);
+  const totalDurationMs = tracker.previousDurationMs + Math.round(performance.now() - started);
   return {
     result,
     trace: {
@@ -563,47 +762,58 @@ async function analyzeHarness(
   tracker: RunTracker,
 ): Promise<AnalysisOutput> {
   const started = performance.now();
+  let evidence = tracker.evidence;
+  let critique = tracker.critique;
+  let stageStarted: number;
 
-  tracker.stage = '증거 수집';
-  let stageStarted = performance.now();
-  const evidenceCall = await runGenerateContentStage(generate, buildAnalysisRequest({
-    model,
-    prompt: 'Extract a structured evidence ledger for faithful image reconstruction.',
-    systemInstruction: HARNESS_EVIDENCE_INSTRUCTION,
-    schema: EVIDENCE_JSON_SCHEMA,
-    base64,
-    mimeType,
-    agenticVision,
-  }), agenticVision, tracker);
-  tracker.stages.push(stageReport(
-    tracker.stage,
-    model,
-    evidenceCall.call,
-    Math.round(performance.now() - stageStarted),
-    evidenceCall.status,
-  ));
-  assertGenerateContentCompleted(evidenceCall.call.response, tracker.stage);
-  const evidence = parseJson(evidenceCall.call.response.text, harnessEvidenceSchema, '증거 수집') as HarnessEvidence;
+  if (!evidence) {
+    beginStage(tracker, '증거 수집');
+    stageStarted = performance.now();
+    const evidenceCall = await runGenerateContentStage(generate, buildAnalysisRequest({
+      model,
+      prompt: 'Extract a structured evidence ledger for faithful image reconstruction.',
+      systemInstruction: HARNESS_EVIDENCE_INSTRUCTION,
+      schema: EVIDENCE_JSON_SCHEMA,
+      base64,
+      mimeType,
+      agenticVision,
+    }), agenticVision, tracker);
+    tracker.stages.push(stageReport(
+      tracker.stage,
+      model,
+      evidenceCall.call,
+      Math.round(performance.now() - stageStarted),
+      evidenceCall.status,
+    ));
+    tracker.stageRecorded = true;
+    assertGenerateContentCompleted(evidenceCall.call.response, tracker.stage);
+    evidence = parseJson(evidenceCall.call.response.text, harnessEvidenceSchema, '증거 수집') as HarnessEvidence;
+    tracker.evidence = evidence;
+  }
 
-  tracker.stage = '교차 비평';
-  stageStarted = performance.now();
-  const criticCall = await runGenerateContentStage(generate, buildAnalysisRequest({
-    model,
-    prompt: `Audit this evidence ledger:\n${JSON.stringify(evidence)}`,
-    systemInstruction: HARNESS_CRITIC_INSTRUCTION,
-    schema: CRITIQUE_JSON_SCHEMA,
-  }), false, tracker);
-  tracker.stages.push(stageReport(
-    tracker.stage,
-    model,
-    criticCall.call,
-    Math.round(performance.now() - stageStarted),
-    'DISABLED',
-  ));
-  assertGenerateContentCompleted(criticCall.call.response, tracker.stage);
-  const critique = parseJson(criticCall.call.response.text, harnessCritiqueSchema, '비평') as HarnessCritique;
+  if (!critique) {
+    beginStage(tracker, '교차 비평');
+    stageStarted = performance.now();
+    const criticCall = await runGenerateContentStage(generate, buildAnalysisRequest({
+      model,
+      prompt: `Audit this evidence ledger:\n${JSON.stringify(evidence)}`,
+      systemInstruction: HARNESS_CRITIC_INSTRUCTION,
+      schema: CRITIQUE_JSON_SCHEMA,
+    }), false, tracker);
+    tracker.stages.push(stageReport(
+      tracker.stage,
+      model,
+      criticCall.call,
+      Math.round(performance.now() - stageStarted),
+      'DISABLED',
+    ));
+    tracker.stageRecorded = true;
+    assertGenerateContentCompleted(criticCall.call.response, tracker.stage);
+    critique = parseJson(criticCall.call.response.text, harnessCritiqueSchema, '비평') as HarnessCritique;
+    tracker.critique = critique;
+  }
 
-  tracker.stage = '최종 합성';
+  beginStage(tracker, '최종 합성');
   stageStarted = performance.now();
   const synthesisCall = await runGenerateContentStage(generate, buildAnalysisRequest({
     model,
@@ -620,15 +830,17 @@ async function analyzeHarness(
     Math.round(performance.now() - stageStarted),
     'DISABLED',
   ));
+  tracker.stageRecorded = true;
   assertGenerateContentCompleted(synthesisCall.call.response, tracker.stage);
   const result = parseJson(synthesisCall.call.response.text, analysisResultSchema, '최종 합성');
-  const totalDurationMs = Math.round(performance.now() - started);
+  const totalDurationMs = tracker.previousDurationMs + Math.round(performance.now() - started);
+  const agenticStatus = aggregateAgenticStatus(tracker.stages, agenticVision);
 
   return {
     result,
     trace: {
       pipeline: 'harness',
-      agenticVisionStatus: evidenceCall.status,
+      agenticVisionStatus: agenticStatus,
       stages: tracker.stages.map((stage) => ({ name: stage.name, durationMs: stage.durationMs })),
       totalDurationMs,
       evidence,
@@ -638,7 +850,7 @@ async function analyzeHarness(
       pipeline: 'harness',
       requestedModel: model,
       agenticVisionRequested: agenticVision,
-      agenticVisionStatus: evidenceCall.status,
+      agenticVisionStatus: agenticStatus,
       stages: tracker.stages,
       totalDurationMs,
       result,
@@ -646,21 +858,41 @@ async function analyzeHarness(
   };
 }
 
-export async function analyzeImage(options: {
+export interface AnalyzeImageOptions {
   apiKey: string;
   base64: string;
   mimeType: string;
   model: string;
   pipeline: AnalysisPipeline;
   agenticVision: boolean;
-}, dependencies: { generateContent?: GenerateContentInvoker } = {}): Promise<AnalysisOutput> {
+  resumeState?: AnalysisResumeState | null;
+}
+
+export async function analyzeImage(options: AnalyzeImageOptions, dependencies: { generateContent?: GenerateContentInvoker } = {}): Promise<AnalysisOutput> {
   const started = performance.now();
+  const resumeState = options.resumeState?.pipeline === options.pipeline ? options.resumeState : null;
+  const agenticVision = resumeState?.agenticVision ?? options.agenticVision;
+  const previousStages = resumeState?.stages.map((stage) => ({
+    ...stage,
+    usage: { ...stage.usage },
+    inspections: [...stage.inspections],
+    attempts: stage.attempts?.map((attempt) => ({
+      ...attempt,
+      usage: { ...attempt.usage },
+      inspections: [...attempt.inspections],
+    })),
+  })) ?? [];
   const tracker: RunTracker = {
     stage: '초기화',
-    stages: [],
-    agenticVisionStatus: options.agenticVision ? 'AVAILABLE_NOT_USED' : 'DISABLED',
+    stages: previousStages,
+    agenticVisionStatus: aggregateAgenticStatus(previousStages, agenticVision),
     attemptCount: 0,
     retryReasons: [],
+    currentAttempts: [],
+    stageRecorded: false,
+    evidence: resumeState?.evidence,
+    critique: resumeState?.critique,
+    previousDurationMs: resumeState?.totalDurationMs ?? 0,
   };
   try {
     let generateContent = dependencies.generateContent;
@@ -669,13 +901,18 @@ export async function analyzeImage(options: {
       generateContent = (parameters: GenerateContentParameters) => ai.models.generateContent(parameters);
     }
     return options.pipeline === 'standard'
-      ? await analyzeStandard(generateContent, options.base64, options.mimeType, options.model, options.agenticVision, tracker)
-      : await analyzeHarness(generateContent, options.base64, options.mimeType, options.model, options.agenticVision, tracker);
+      ? await analyzeStandard(generateContent, options.base64, options.mimeType, options.model, agenticVision, tracker)
+      : await analyzeHarness(generateContent, options.base64, options.mimeType, options.model, agenticVision, tracker);
   } catch (error) {
     const publicError = publicApiError(error);
     const category = failureCategory(publicError.message);
-    if (options.agenticVision && isAgenticUnsupported(publicError)) tracker.agenticVisionStatus = 'UNSUPPORTED';
+    if (agenticVision && isAgenticUnsupported(publicError)) tracker.agenticVisionStatus = 'UNSUPPORTED';
+    if (!tracker.stageRecorded && tracker.currentAttempts.length) {
+      tracker.stages.push(failedStageReport(tracker, options.model));
+      tracker.stageRecorded = true;
+    }
     const inspections = tracker.stages.flatMap((stage) => stage.inspections);
+    const totalDurationMs = tracker.previousDurationMs + Math.round(performance.now() - started);
     const report: AnalysisReport = {
       reportVersion: 1,
       createdAt: Date.now(),
@@ -684,8 +921,8 @@ export async function analyzeImage(options: {
       apiMethod: 'generateContent',
       safetyMode: 'EXPLICIT_OFF',
       requestedModel: options.model,
-      resolvedModels: [...new Set(tracker.stages.map((stage) => stage.resolvedModel))],
-      agenticVisionRequested: options.agenticVision,
+      resolvedModels: [...new Set(tracker.stages.map((stage) => stage.resolvedModel).filter(Boolean))],
+      agenticVisionRequested: agenticVision,
       agenticVisionStatus: tracker.agenticVisionStatus,
       inspections,
       stages: tracker.stages,
@@ -695,10 +932,10 @@ export async function analyzeImage(options: {
         totalUsd: null,
         agenticAttributedUsd: null,
         pricingModel: null,
-        pricingAsOf: '2026-07-21',
+        pricingAsOf: '2026-08-09',
         note: '응답 토큰 사용량이 없어 비용을 산정하지 않았습니다.',
       },
-      totalDurationMs: Math.round(performance.now() - started),
+      totalDurationMs,
       failure: {
         stage: tracker.stage,
         category,
@@ -707,18 +944,28 @@ export async function analyzeImage(options: {
         retryReasons: tracker.retryReasons,
       },
     };
-    throw new AnalysisRunError(publicError.message, report);
+    const nextState: AnalysisResumeState = {
+      pipeline: options.pipeline,
+      agenticVision,
+      nextStage: nextResumeStage(options.pipeline, tracker.stage),
+      stages: tracker.stages,
+      ...(tracker.evidence ? { evidence: tracker.evidence } : {}),
+      ...(tracker.critique ? { critique: tracker.critique } : {}),
+      totalDurationMs,
+    };
+    throw new AnalysisRunError(publicError.message, report, nextState);
   }
 }
 
-function classifyModel(id: string, description: string, actions: string[]): Pick<ModelOption, 'task' | 'selectable'> {
+export function classifyModel(id: string, description: string, actions: string[]): Pick<ModelOption, 'task' | 'selectable'> {
   const normalized = `${id} ${description}`.toLowerCase();
-  const canGenerate = actions.some((action) => action.toLowerCase().includes('generatecontent'));
-  const imageModel = /(?:^|[- ])image(?:$|[- ])|nano.?banana/.test(normalized)
-    && !/embedding|classification|detection/.test(normalized);
+  const normalizedId = id.toLowerCase();
+  const canGenerate = actions.some((action) => action.toLowerCase() === 'generatecontent');
+  const imageModel = /(?:^|-)image(?:-|$)|image-generation|nano.?banana/.test(normalizedId)
+    && !/embedding|classification|detection/.test(normalizedId);
   if (imageModel && canGenerate) return { task: 'image', selectable: true };
-  const analysisModel = id.startsWith('gemini-') && canGenerate
-    && !/embedding|tts|audio|robotics|computer-use|deep-research|lyria|veo/.test(normalized);
+  const analysisModel = normalizedId.startsWith('gemini-') && canGenerate
+    && !/embedding|(?:^|[-_ ])embed(?:$|[-_ ])|tts|audio|live|robotics|computer[-_ ]?use|deep[-_ ]?research|lyria|veo|imagen|gemma|omni|antigravity|(?:^|[-_ ])agent(?:$|[-_ ])/.test(normalized);
   if (analysisModel) return { task: 'analysis', selectable: true };
   return { task: 'specialized', selectable: false };
 }
@@ -727,13 +974,13 @@ export async function listAvailableModels(apiKey: string): Promise<ModelOption[]
   const ai = createClient(apiKey);
   try {
     const pager = await ai.models.list({ config: { pageSize: 100, queryBase: true } });
-    const models: ModelOption[] = [];
+    const models = new Map<string, ModelOption>();
     for await (const model of pager) {
       const id = (model.name ?? '').replace(/^models\//, '');
       if (!id) continue;
       const actions = model.supportedActions ?? [];
       const classification = classifyModel(id, model.description ?? '', actions);
-      models.push({
+      models.set(id, {
         id,
         displayName: model.displayName || id,
         description: model.description || '설명 없음',
@@ -741,9 +988,10 @@ export async function listAvailableModels(apiKey: string): Promise<ModelOption[]
         inputTokenLimit: model.inputTokenLimit,
         outputTokenLimit: model.outputTokenLimit,
         ...classification,
+        source: 'api',
       });
     }
-    return models.sort((a, b) => a.task.localeCompare(b.task) || a.displayName.localeCompare(b.displayName));
+    return [...models.values()].sort((a, b) => a.task.localeCompare(b.task) || a.displayName.localeCompare(b.displayName));
   } catch (error) {
     throw publicApiError(error);
   }

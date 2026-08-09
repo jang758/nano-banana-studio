@@ -11,7 +11,9 @@ interface Props {
   onApiKeyChange: (key: string) => void;
   models: ModelOption[];
   modelRefreshState: 'idle' | 'loading' | 'error';
+  modelRefreshError: string;
   onRefreshModels: () => void;
+  onAddCustomModel: (value: string) => string;
 }
 const ratios: AspectRatio[] = ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'];
 const sizes: ImageSize[] = ['1K', '2K', '4K'];
@@ -25,16 +27,36 @@ export function SettingsPanel({
   onApiKeyChange,
   models,
   modelRefreshState,
+  modelRefreshError,
   onRefreshModels,
+  onAddCustomModel,
 }: Props) {
   const [showKey, setShowKey] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [customModel, setCustomModel] = useState('');
+  const [customError, setCustomError] = useState('');
   const analysisModels = useMemo(() => models.filter((model) => model.task === 'analysis' && model.selectable), [models]);
   const imageModels = useMemo(() => models.filter((model) => model.task === 'image' && model.selectable), [models]);
   const specializedModels = useMemo(() => models.filter((model) => model.task === 'specialized' || !model.selectable), [models]);
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     onSettingsChange({ ...settings, [key]: value });
+  };
+
+  const addCustom = () => {
+    try {
+      const id = onAddCustomModel(customModel);
+      update('analysisModel', id);
+      setCustomModel('');
+      setCustomError('');
+    } catch (error) {
+      setCustomError(error instanceof Error ? error.message : 'Custom Model을 추가하지 못했습니다.');
+    }
+  };
+
+  const optionLabel = (model: ModelOption) => {
+    const source = model.source === 'api' ? '계정' : model.source === 'custom' ? 'Custom' : '기본';
+    return `[${source}] ${model.displayName} · ${model.id}`;
   };
 
   return (
@@ -70,14 +92,26 @@ export function SettingsPanel({
               {modelRefreshState === 'loading' ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />}
               API 모델 전체 새로고침
             </button>
+            {modelRefreshState === 'error' && modelRefreshError && <p className="settings-error">{modelRefreshError}</p>}
           </section>
 
           <section className="settings-section">
             <label className="settings-label" htmlFor="analysis-model">분석 모델</label>
             <select id="analysis-model" value={settings.analysisModel} onChange={(event) => update('analysisModel', event.target.value)}>
-              {analysisModels.map((model) => <option value={model.id} key={model.id}>{model.displayName} · {model.id}</option>)}
+              {analysisModels.map((model) => <option value={model.id} key={model.id}>{optionLabel(model)}</option>)}
             </select>
             <p className="settings-help">기본값은 요청하신 <code>gemini-pro-latest</code>입니다.</p>
+            <div className="custom-model-row">
+              <input
+                value={customModel}
+                onChange={(event) => { setCustomModel(event.target.value); setCustomError(''); }}
+                onKeyDown={(event) => { if (event.key === 'Enter') addCustom(); }}
+                placeholder="Custom Model ID"
+                aria-label="Custom Model ID"
+              />
+              <button className="secondary-button" disabled={!customModel.trim()} onClick={addCustom}>추가·선택</button>
+            </div>
+            {customError && <p className="settings-error">{customError}</p>}
           </section>
 
           <section className="settings-section agentic-setting">
@@ -95,7 +129,7 @@ export function SettingsPanel({
           <section className="settings-section">
             <label className="settings-label" htmlFor="generation-model">이미지 생성 모델</label>
             <select id="generation-model" value={settings.generationModel} onChange={(event) => update('generationModel', event.target.value)}>
-              {imageModels.map((model) => <option value={model.id} key={model.id}>{model.displayName} · {model.id}</option>)}
+              {imageModels.map((model) => <option value={model.id} key={model.id}>{optionLabel(model)}</option>)}
             </select>
           </section>
 
@@ -127,7 +161,7 @@ export function SettingsPanel({
                   <div key={task}>
                     <h3>{task === 'analysis' ? '분석 선택 가능' : '이미지 생성 선택 가능'}</h3>
                     {models.filter((model) => model.task === task && model.selectable).map((model) => (
-                      <div className="catalog-row" key={model.id}><CheckCircle2 size={13} /><span><b>{model.displayName}</b><small>{model.id}</small></span></div>
+                      <div className="catalog-row" key={model.id}><CheckCircle2 size={13} /><span><b>{model.displayName}</b><small>{model.id} · {model.source}</small></span></div>
                     ))}
                   </div>
                 ))}

@@ -25,6 +25,7 @@ interface Props {
   models: ModelOption[];
   modelRefreshState: 'idle' | 'loading' | 'error';
   onRefreshModels: () => Promise<number>;
+  onAddCustomModel: (value: string) => string;
   session: CompareSession;
   onSessionChange: Dispatch<SetStateAction<CompareSession>>;
 }
@@ -67,7 +68,7 @@ function ResultCard({
       ) : error ? (
         <div className="compare-side-error">
           <span>{error}</span>
-          <button className="secondary-button" onClick={onRetry}><RefreshCw size={14} /> 이 분석만 재시도</button>
+          <button className="secondary-button" onClick={onRetry}><RefreshCw size={14} /> {state.resumeState ? '실패 단계부터 재시도' : '이 분석만 재시도'}</button>
         </div>
       ) : (
         <div className="compare-empty">비교 분석을 실행하면 결과가 표시됩니다.</div>
@@ -88,6 +89,7 @@ export default function CompareApp({
   models,
   modelRefreshState,
   onRefreshModels,
+  onAddCustomModel,
   session,
   onSessionChange,
 }: Props) {
@@ -95,6 +97,7 @@ export default function CompareApp({
   const [showKey, setShowKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [customModel, setCustomModel] = useState('');
   const analysisModels = useMemo(
     () => models.filter((model) => model.task === 'analysis' && model.selectable),
     [models],
@@ -102,13 +105,24 @@ export default function CompareApp({
   const modelLabel = analysisModels.find((item) => item.id === settings.analysisModel)?.displayName || settings.analysisModel;
 
   const changeAnalysisSettings = (nextSettings: AppSettings) => {
+    const agenticChanged = nextSettings.agenticVision !== settings.agenticVision;
+    const modelChanged = nextSettings.analysisModel !== settings.analysisModel;
     onSettingsChange(nextSettings);
-    onSessionChange((current) => ({
-      ...current,
-      standard: createCompareSideState(),
-      harness: createCompareSideState(),
-      error: null,
-    }));
+    if (agenticChanged) {
+      onSessionChange((current) => ({
+        ...current,
+        standard: createCompareSideState(),
+        harness: createCompareSideState(),
+        error: null,
+      }));
+    } else if (modelChanged) {
+      onSessionChange((current) => ({
+        ...current,
+        standard: current.standard.error && current.standard.resumeState ? current.standard : createCompareSideState(),
+        harness: current.harness.error && current.harness.resumeState ? current.harness : createCompareSideState(),
+        error: null,
+      }));
+    }
   };
 
   const useFile = async (file: File) => {
@@ -140,7 +154,7 @@ export default function CompareApp({
     return () => window.removeEventListener('paste', onPaste);
   });
 
-  const run = async (pipelines: AnalysisPipeline[] = ['standard', 'harness']) => {
+  const run = async (pipelines: AnalysisPipeline[] = ['standard', 'harness'], resumeFailed = false) => {
     if (!session.image || busy) return;
     setBusy(true);
     onSessionChange((current) => ({
@@ -157,7 +171,11 @@ export default function CompareApp({
     };
     const results = await Promise.all(pipelines.map(async (pipeline) => ({
       pipeline,
-      result: await runComparisonSide({ ...common, pipeline }),
+      result: await runComparisonSide({
+        ...common,
+        pipeline,
+        resumeState: resumeFailed ? session[pipeline].resumeState : null,
+      }),
     })));
     onSessionChange((current) => {
       const next = { ...current };
@@ -220,7 +238,7 @@ export default function CompareApp({
             <button aria-label="API 키 표시 전환" onClick={() => setShowKey((value) => !value)}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button>
           </div>
           <select value={settings.analysisModel} onChange={(event) => changeAnalysisSettings({ ...settings, analysisModel: event.target.value })} title={modelLabel} aria-label="비교 분석 모델">
-            {analysisModels.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.id}</option>)}
+            {analysisModels.map((item) => <option key={item.id} value={item.id}>[{item.source === 'api' ? '계정' : item.source === 'custom' ? 'Custom' : '기본'}] {item.displayName} · {item.id}</option>)}
           </select>
           <button className="secondary-button" disabled={!apiKey.trim() || modelRefreshState === 'loading' || busy} onClick={() => {
             onSessionChange((current) => ({ ...current, error: null }));
@@ -232,6 +250,18 @@ export default function CompareApp({
             {modelRefreshState === 'loading' ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} 모델 갱신
           </button>
           <label className="compare-check"><input type="checkbox" checked={settings.agenticVision} onChange={(event) => changeAnalysisSettings({ ...settings, agenticVision: event.target.checked })} /> 코드 기반 정밀검사 허용</label>
+          <div className="compare-custom-model">
+            <input value={customModel} onChange={(event) => setCustomModel(event.target.value)} placeholder="Custom Model ID" aria-label="비교 Custom Model ID" />
+            <button className="secondary-button" disabled={!customModel.trim() || busy} onClick={() => {
+              try {
+                const id = onAddCustomModel(customModel);
+                changeAnalysisSettings({ ...settings, analysisModel: id });
+                setCustomModel('');
+              } catch (error) {
+                onSessionChange((current) => ({ ...current, error: error instanceof Error ? error.message : 'Custom Model을 추가하지 못했습니다.' }));
+              }
+            }}>추가·선택</button>
+          </div>
         </section>
 
         <section
@@ -296,8 +326,8 @@ export default function CompareApp({
         )}
 
         <div className="compare-grid">
-          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} onRetry={() => void run(['standard'])} />
-          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} onRetry={() => void run(['harness'])} />
+          <ResultCard title="기존 분석 유지" subtitle="ONE-PASS BASELINE" state={session.standard} onRetry={() => void run(['standard'], true)} />
+          <ResultCard title="새 분석 하네스" subtitle="EVIDENCE → CRITIC → SYNTHESIS" state={session.harness} onRetry={() => void run(['harness'], true)} />
         </div>
       </main>
     </div>

@@ -1,6 +1,6 @@
 import { AnalysisRunError, analyzeImage } from './geminiService';
 import { saveHistoryItem } from './storageService';
-import type { AnalysisPipeline, AppSettings, CompareSideState } from '../types';
+import type { AnalysisPipeline, AnalysisResumeState, AppSettings, CompareSideState } from '../types';
 import { formatAnalysis } from '../utils/analysisFormat';
 
 interface ComparisonSideOptions {
@@ -9,6 +9,7 @@ interface ComparisonSideOptions {
   mimeType: string;
   settings: AppSettings;
   pipeline: AnalysisPipeline;
+  resumeState?: AnalysisResumeState | null;
 }
 
 interface ComparisonDependencies {
@@ -30,6 +31,7 @@ export async function runComparisonSide(
       model: options.settings.analysisModel,
       pipeline: options.pipeline,
       agenticVision: options.settings.agenticVision,
+      resumeState: options.resumeState,
     });
     let historyId: string | null = null;
     let saveError: string | null = null;
@@ -54,7 +56,7 @@ export async function runComparisonSide(
     } catch (error) {
       saveError = error instanceof Error ? error.message : '히스토리에 저장하지 못했습니다.';
     }
-    return { output, report: output.report, error: null, historyId, saveError };
+    return { output, report: output.report, error: null, historyId, saveError, resumeState: null };
   } catch (error) {
     return {
       output: null,
@@ -62,6 +64,7 @@ export async function runComparisonSide(
       error: error instanceof Error ? error.message : '비교 분석에 실패했습니다.',
       historyId: null,
       saveError: null,
+      resumeState: error instanceof AnalysisRunError ? error.resumeState : null,
     };
   }
 }

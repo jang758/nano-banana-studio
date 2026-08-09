@@ -56,4 +56,14 @@ describe('analysis contract', () => {
     expect(serviceSource).not.toContain('as never');
     expect(serviceSource).toContain('ai.models.generateContent');
   });
+
+  it('keeps API keys outside persisted settings and storage records', () => {
+    const typesSource = readFileSync(new URL('../types.ts', import.meta.url), 'utf8');
+    const storageSource = readFileSync(new URL('../services/storageService.ts', import.meta.url), 'utf8');
+    const studioSource = readFileSync(new URL('../StudioApp.tsx', import.meta.url), 'utf8');
+    const appSettings = typesSource.slice(typesSource.indexOf('export interface AppSettings'), typesSource.indexOf('export interface AnalysisResult'));
+    expect(appSettings).not.toContain('apiKey');
+    expect(storageSource).not.toContain('apiKey');
+    expect(studioSource).toContain("const [apiKey, setApiKey] = useState('')");
+  });
 });
