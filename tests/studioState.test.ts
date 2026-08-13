@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_MODELS } from '../constants';
+import { DEFAULT_SETTINGS, FALLBACK_MODELS } from '../constants';
 import {
   createCompareSession,
   createCustomModel,
@@ -50,8 +50,14 @@ describe('mergeModels', () => {
     expect(merged).toHaveLength(FALLBACK_MODELS.length);
   });
 
-  it('ships twelve analysis defaults and puts a custom model first', () => {
-    expect(FALLBACK_MODELS.filter((model) => model.task === 'analysis')).toHaveLength(12);
+  it('ships thirteen analysis defaults, keeps Pro Latest as default, and puts a custom model first', () => {
+    expect(FALLBACK_MODELS.filter((model) => model.task === 'analysis')).toHaveLength(13);
+    expect(FALLBACK_MODELS.find((model) => model.id === 'gemini-3.7-flash')).toMatchObject({
+      task: 'analysis',
+      selectable: true,
+      source: 'default',
+    });
+    expect(DEFAULT_SETTINGS.analysisModel).toBe('gemini-pro-latest');
     const custom = createCustomModel('models/gemini-private-vision');
     const merged = mergeModels([custom]);
     expect(merged.filter((model) => model.task === 'analysis')[0]).toMatchObject({

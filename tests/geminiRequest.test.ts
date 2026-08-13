@@ -75,6 +75,7 @@ describe('generateContent request contract', () => {
   });
 
   it('splits thinking settings by model generation and adds high resolution only with an image', () => {
+    expect(thinkingConfigForModel('gemini-3.7-flash')).toEqual({ thinkingLevel: 'HIGH' });
     expect(thinkingConfigForModel('gemini-3.6-flash')).toEqual({ thinkingLevel: 'HIGH' });
     expect(thinkingConfigForModel('gemini-2.5-pro')).toEqual({ thinkingBudget: -1 });
     expect(thinkingConfigForModel('gemini-private-vision')).toBeUndefined();
@@ -97,8 +98,17 @@ describe('generateContent request contract', () => {
   });
 
   it('adds code execution without changing the selected model', () => {
-    const payload = request(true);
-    expect(payload.model).toBe('gemini-pro-latest');
+    const payload = buildAnalysisRequest({
+      model: 'gemini-3.7-flash',
+      prompt: 'inspect',
+      systemInstruction: 'system',
+      schema: { type: 'object' },
+      base64: 'AAAA',
+      mimeType: 'image/png',
+      agenticVision: true,
+    });
+    expect(payload.model).toBe('gemini-3.7-flash');
+    expect(payload.config?.thinkingConfig).toEqual({ thinkingLevel: 'HIGH' });
     expect(payload.config?.tools).toEqual([{ codeExecution: {} }]);
   });
 

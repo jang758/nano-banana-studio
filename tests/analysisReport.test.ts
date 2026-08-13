@@ -52,8 +52,8 @@ describe('analysis report', () => {
     expect(cost.agenticAttributedUsd).toBeCloseTo(0.0004, 8);
   });
 
-  it('leaves cost unknown for a model without a local official price mapping', () => {
-    const cost = estimateCost([{ ...stage, requestedModel: 'gemini-unknown', resolvedModel: 'gemini-unknown' }]);
+  it('leaves Gemini 3.7 cost unknown until an official price mapping is available', () => {
+    const cost = estimateCost([{ ...stage, requestedModel: 'gemini-3.7-flash', resolvedModel: 'gemini-3.7-flash' }]);
     expect(cost.totalUsd).toBeNull();
     expect(cost.agenticAttributedUsd).toBeNull();
   });

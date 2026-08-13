@@ -28,6 +28,15 @@ export const FALLBACK_MODELS: ModelOption[] = [
     source: 'default',
   },
   {
+    id: 'gemini-3.7-flash',
+    displayName: 'Gemini 3.7 Flash',
+    description: '신규 Gemini 3.7 Flash 멀티모달 분석 모델',
+    supportedActions: ['generateContent'],
+    task: 'analysis',
+    selectable: true,
+    source: 'default',
+  },
+  {
     id: 'gemini-3.6-flash',
     displayName: 'Gemini 3.6 Flash',
     description: '최신 안정화 Flash 분석 모델',

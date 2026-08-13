@@ -61,10 +61,11 @@ API 키는 앱이 열려 있는 동안 세 화면에서 함께 유지됩니다. 
 
 이미지 분석에 사용할 모델을 선택합니다. 기본값은 지능 우선의 `gemini-pro-latest`입니다. 앱은 선택한 모델을 증거 조사, 비평, 종합을 포함한 모든 분석 단계에 그대로 사용하며 다른 모델로 자동 변경하지 않습니다.
 
-앱을 켜면 다음 12개 분석 모델이 기본 목록에 표시됩니다.
+앱을 켜면 다음 13개 분석 모델이 기본 목록에 표시됩니다.
 
 - `gemini-pro-latest`
 - `gemini-3.1-pro-preview`
+- `gemini-3.7-flash`
 - `gemini-3.6-flash`
 - `gemini-3.5-flash`
 - `gemini-3.5-flash-lite`
@@ -75,6 +76,8 @@ API 키는 앱이 열려 있는 동안 세 화면에서 함께 유지됩니다. 
 - `gemini-2.5-pro`
 - `gemini-2.5-flash`
 - `gemini-2.5-flash-lite`
+
+`gemini-3.7-flash`의 공식 Gemini Developer API 단가가 가격표에 확인되기 전에는 리포트의 비용이 `산정 불가`로 표시됩니다.
 
 목록의 표시는 출처에 따라 `[기본]`, `[계정]`, `[Custom]`으로 구분됩니다.
 

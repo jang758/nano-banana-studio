@@ -61,10 +61,11 @@ Runs the original analysis and the new harness with the same image, model, and A
 
 Select the model used for image analysis. The intelligence-first default is `gemini-pro-latest`. The app uses the selected model unchanged for every analysis stage, including evidence gathering, critique, and synthesis. It never silently routes a stage to another model.
 
-The following 12 analysis models are available in the default list at startup:
+The following 13 analysis models are available in the default list at startup:
 
 - `gemini-pro-latest`
 - `gemini-3.1-pro-preview`
+- `gemini-3.7-flash`
 - `gemini-3.6-flash`
 - `gemini-3.5-flash`
 - `gemini-3.5-flash-lite`
@@ -75,6 +76,8 @@ The following 12 analysis models are available in the default list at startup:
 - `gemini-2.5-pro`
 - `gemini-2.5-flash`
 - `gemini-2.5-flash-lite`
+
+Until an official Gemini Developer API price for `gemini-3.7-flash` is published, its report cost is shown as unavailable.
 
 Each option is labeled by source as `[기본]` (default), `[계정]` (account), or `[Custom]`.
 
