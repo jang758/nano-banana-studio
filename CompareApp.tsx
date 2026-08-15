@@ -43,7 +43,7 @@ function ResultCard({
   onRetry: () => void;
   language: 'en' | 'ko';
 }) {
-  const { output, report, error, historyId, saveError } = state;
+  const { output, report, error, historyId, saveError, autoSavePath, autoSaveError } = state;
   return (
     <section className="compare-result">
       <div className="compare-result-head">
@@ -62,6 +62,8 @@ function ResultCard({
           </div>
           {historyId && <div className="compare-save-state"><CheckCircle2 size={15} /> 히스토리에 저장됨</div>}
           {saveError && <div className="compare-side-error">분석은 완료됐지만 히스토리 저장 실패: {saveError}</div>}
+          {autoSavePath && <div className="compare-save-state"><CheckCircle2 size={15} /> 자동 저장됨: {autoSavePath}</div>}
+          {autoSaveError && <div className="compare-side-error">분석은 완료됐지만 결과 파일 자동 저장 실패: {autoSaveError}</div>}
           <h3>생성 프롬프트</h3>
           <textarea className="compare-prompt" readOnly value={language === 'en' ? output.result.prompt_en : output.result.prompt_ko} />
           <h3>분석 사양</h3>
@@ -170,6 +172,7 @@ export default function CompareApp({
       apiKey,
       base64: session.image.base64,
       mimeType: session.image.mimeType,
+      fileName: session.image.fileName,
       settings,
     };
     const results = await Promise.all(pipelines.map(async (pipeline) => ({

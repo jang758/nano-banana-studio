@@ -189,6 +189,7 @@ export interface WorkspaceSlot {
   id: string;
   originalImage: string | null;
   originalMimeType: string | null;
+  originalFileName: string | null;
   generatedImage: string | null;
   generatedMimeType: string | null;
   analysisText: string;
@@ -201,6 +202,9 @@ export interface WorkspaceSlot {
   trace: AnalysisTrace | null;
   report: AnalysisReport | null;
   savedHistoryId: string | null;
+  historySaveError: string | null;
+  autoSavePath: string | null;
+  autoSaveError: string | null;
   resumeState: AnalysisResumeState | null;
 }
 
@@ -215,11 +219,19 @@ export interface CompareSideState {
   error: string | null;
   historyId: string | null;
   saveError: string | null;
+  autoSavePath: string | null;
+  autoSaveError: string | null;
   resumeState: AnalysisResumeState | null;
 }
 
+export interface SourceImageData {
+  base64: string;
+  mimeType: string;
+  fileName: string | null;
+}
+
 export interface CompareSession {
-  image: { base64: string; mimeType: string } | null;
+  image: SourceImageData | null;
   standard: CompareSideState;
   harness: CompareSideState;
   error: string | null;

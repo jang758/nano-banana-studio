@@ -15,7 +15,7 @@ export function takeSelectedFile(input: Pick<HTMLInputElement, 'files' | 'value'
   return file;
 }
 
-export async function readImageFile(file: File): Promise<{ base64: string; mimeType: string }> {
+export async function readImageFile(file: File): Promise<{ base64: string; mimeType: string; fileName: string | null }> {
   if (!file.type.startsWith('image/')) throw new Error('이미지 파일만 사용할 수 있습니다.');
   const base64 = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -24,5 +24,5 @@ export async function readImageFile(file: File): Promise<{ base64: string; mimeT
     reader.readAsDataURL(file);
   });
   if (!base64) throw new Error('이미지를 읽지 못했습니다.');
-  return { base64, mimeType: file.type };
+  return { base64, mimeType: file.type, fileName: file.name || null };
 }

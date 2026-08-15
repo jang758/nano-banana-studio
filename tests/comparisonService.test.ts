@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from '../constants';
 import { runComparisonSide } from '../services/comparisonService';
 import { AnalysisRunError, analyzeImage } from '../services/geminiService';
 import { saveHistoryItem } from '../services/storageService';
+import { saveAnalysisResultFiles } from '../services/resultFileService';
 import type { AnalysisOutput, AnalysisReport, AnalysisResult } from '../types';
 
 const result: AnalysisResult = {
@@ -51,16 +52,38 @@ describe('runComparisonSide', () => {
       type: input.type,
       searchText: 'test',
     });
-    const common = { apiKey: 'test', base64: 'image', mimeType: 'image/png', settings: DEFAULT_SETTINGS };
+    const saveFiles: typeof saveAnalysisResultFiles = async () => 'analysis_results/harness-result.txt';
+    const common = { apiKey: 'test', base64: 'image', mimeType: 'image/png', fileName: 'source.png', settings: DEFAULT_SETTINGS };
 
     const [standard, harness] = await Promise.all([
-      runComparisonSide({ ...common, pipeline: 'standard' }, { analyze, save }),
-      runComparisonSide({ ...common, pipeline: 'harness' }, { analyze, save }),
+      runComparisonSide({ ...common, pipeline: 'standard' }, { analyze, save, saveFiles }),
+      runComparisonSide({ ...common, pipeline: 'harness' }, { analyze, save, saveFiles }),
     ]);
 
     expect(standard.output).toBeNull();
     expect(standard.report?.outcome).toBe('failed');
     expect(harness.output).toBe(harnessOutput);
     expect(harness.historyId).toBe('harness-history-id');
+    expect(harness.autoSavePath).toBe('analysis_results/harness-result.txt');
+  });
+
+  it('keeps a completed analysis when both persistence targets fail', async () => {
+    const analyze = (async () => harnessOutput) as typeof analyzeImage;
+    const save: typeof saveHistoryItem = async () => { throw new Error('history unavailable'); };
+    const saveFiles: typeof saveAnalysisResultFiles = async () => { throw new Error('disk unavailable'); };
+
+    const state = await runComparisonSide({
+      apiKey: 'test',
+      base64: 'image',
+      mimeType: 'image/png',
+      fileName: 'source.png',
+      settings: DEFAULT_SETTINGS,
+      pipeline: 'harness',
+    }, { analyze, save, saveFiles });
+
+    expect(state.output).toBe(harnessOutput);
+    expect(state.error).toBeNull();
+    expect(state.saveError).toBe('history unavailable');
+    expect(state.autoSaveError).toBe('disk unavailable');
   });
 });

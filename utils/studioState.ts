@@ -14,6 +14,7 @@ export function createWorkspaceSlot(): WorkspaceSlot {
     id: crypto.randomUUID(),
     originalImage: null,
     originalMimeType: null,
+    originalFileName: null,
     generatedImage: null,
     generatedMimeType: null,
     analysisText: '',
@@ -26,6 +27,9 @@ export function createWorkspaceSlot(): WorkspaceSlot {
     trace: null,
     report: null,
     savedHistoryId: null,
+    historySaveError: null,
+    autoSavePath: null,
+    autoSaveError: null,
     resumeState: null,
   };
 }
@@ -35,7 +39,16 @@ export function createPipelineSession(): PipelineWorkspaceSession {
 }
 
 export function createCompareSideState(): CompareSideState {
-  return { output: null, report: null, error: null, historyId: null, saveError: null, resumeState: null };
+  return {
+    output: null,
+    report: null,
+    error: null,
+    historyId: null,
+    saveError: null,
+    autoSavePath: null,
+    autoSaveError: null,
+    resumeState: null,
+  };
 }
 
 export function createCompareSession(): CompareSession {

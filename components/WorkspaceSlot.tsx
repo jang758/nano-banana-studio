@@ -13,7 +13,8 @@ import {
   X,
 } from 'lucide-react';
 import { AnalysisRunError, analyzeImage, generateImageFromPrompt } from '../services/geminiService';
-import type { AnalysisPipeline, AppSettings, ModalData, WorkspaceSlot as Slot } from '../types';
+import { saveAnalysisResultFiles } from '../services/resultFileService';
+import type { AnalysisOutput, AnalysisPipeline, AppSettings, ModalData, WorkspaceSlot as Slot } from '../types';
 import { formatAnalysis } from '../utils/analysisFormat';
 import { getClipboardImage, readImageFile, takeSelectedFile } from '../utils/imageInput';
 import { agenticLabel, AnalysisReportView } from './AnalysisReportView';
@@ -53,10 +54,24 @@ export function WorkspaceSlot({
   const [dragging, setDragging] = useState(false);
   const [copied, setCopied] = useState<'analysis' | 'prompt' | null>(null);
 
-  const runAnalysis = async (base64: string, mimeType: string, resumeState: Slot['resumeState'] = null) => {
-    onUpdate(slot.id, { status: 'analyzing', error: null, report: null, resumeState });
+  const runAnalysis = async (
+    base64: string,
+    mimeType: string,
+    resumeState: Slot['resumeState'] = null,
+    fileName: string | null = slot.originalFileName,
+  ) => {
+    onUpdate(slot.id, {
+      status: 'analyzing',
+      error: null,
+      report: null,
+      historySaveError: null,
+      autoSavePath: null,
+      autoSaveError: null,
+      resumeState,
+    });
+    let output: AnalysisOutput;
     try {
-      const output = await analyzeImage({
+      output = await analyzeImage({
         apiKey,
         base64,
         mimeType,
@@ -65,42 +80,67 @@ export function WorkspaceSlot({
         agenticVision: settings.agenticVision,
         resumeState,
       });
-      const completed: Slot = {
-        ...slot,
-        originalImage: base64,
-        originalMimeType: mimeType,
-        generatedImage: null,
-        generatedMimeType: null,
-        rawAnalysis: output.result,
-        trace: output.trace,
-        report: output.report,
-        analysisText: formatAnalysis(output.result, 'en'),
-        analysisLang: 'en',
-        currentPrompt: output.result.prompt_en,
-        promptLang: 'en',
-        status: 'saving',
-        error: null,
-        savedHistoryId: null,
-        resumeState: null,
-      };
-      onUpdate(slot.id, completed);
-      const id = await onSave(completed, 'analysis');
-      onUpdate(slot.id, { status: 'idle', savedHistoryId: id });
     } catch (error) {
       onUpdate(slot.id, {
         status: 'error',
         error: error instanceof Error ? error.message : '분석에 실패했습니다.',
         ...(error instanceof AnalysisRunError ? { report: error.report, resumeState: error.resumeState } : { resumeState: null }),
       });
+      return;
     }
+
+    const completed: Slot = {
+      ...slot,
+      originalImage: base64,
+      originalMimeType: mimeType,
+      originalFileName: fileName,
+      generatedImage: null,
+      generatedMimeType: null,
+      rawAnalysis: output.result,
+      trace: output.trace,
+      report: output.report,
+      analysisText: formatAnalysis(output.result, 'en'),
+      analysisLang: 'en',
+      currentPrompt: output.result.prompt_en,
+      promptLang: 'en',
+      status: 'saving',
+      error: null,
+      savedHistoryId: null,
+      historySaveError: null,
+      autoSavePath: null,
+      autoSaveError: null,
+      resumeState: null,
+    };
+    onUpdate(slot.id, completed);
+
+    const [historyResult, fileResult] = await Promise.allSettled([
+      onSave(completed, 'analysis'),
+      saveAnalysisResultFiles({
+        pipeline,
+        output,
+        references: [{ base64, mimeType, fileName }],
+      }),
+    ]);
+    onUpdate(slot.id, {
+      status: 'idle',
+      savedHistoryId: historyResult.status === 'fulfilled' ? historyResult.value : null,
+      historySaveError: historyResult.status === 'rejected'
+        ? (historyResult.reason instanceof Error ? historyResult.reason.message : '히스토리에 저장하지 못했습니다.')
+        : null,
+      autoSavePath: fileResult.status === 'fulfilled' ? fileResult.value : null,
+      autoSaveError: fileResult.status === 'rejected'
+        ? (fileResult.reason instanceof Error ? fileResult.reason.message : '결과 파일을 자동 저장하지 못했습니다.')
+        : null,
+    });
   };
 
   const useFile = async (file: File) => {
     try {
-      const { base64, mimeType } = await readImageFile(file);
+      const { base64, mimeType, fileName } = await readImageFile(file);
       onUpdate(slot.id, {
         originalImage: base64,
         originalMimeType: mimeType,
+        originalFileName: fileName,
         generatedImage: null,
         generatedMimeType: null,
         rawAnalysis: null,
@@ -109,11 +149,14 @@ export function WorkspaceSlot({
         analysisText: '',
         currentPrompt: '',
         savedHistoryId: null,
+        historySaveError: null,
+        autoSavePath: null,
+        autoSaveError: null,
         resumeState: null,
         status: 'analyzing',
         error: null,
       });
-      await runAnalysis(base64, mimeType);
+      await runAnalysis(base64, mimeType, null, fileName);
     } catch (error) {
       onUpdate(slot.id, {
         status: 'error',
@@ -170,12 +213,15 @@ export function WorkspaceSlot({
 
   const saveCurrent = async () => {
     if (!slot.rawAnalysis || busy) return;
-    onUpdate(slot.id, { status: 'saving', error: null });
+    onUpdate(slot.id, { status: 'saving', error: null, historySaveError: null });
     try {
       const id = await onSave(slot, slot.generatedImage ? 'edit' : 'analysis');
-      onUpdate(slot.id, { status: 'idle', savedHistoryId: id });
+      onUpdate(slot.id, { status: 'idle', savedHistoryId: id, historySaveError: null });
     } catch (error) {
-      onUpdate(slot.id, { status: 'error', error: error instanceof Error ? error.message : '히스토리에 저장하지 못했습니다.' });
+      onUpdate(slot.id, {
+        status: 'idle',
+        historySaveError: error instanceof Error ? error.message : '히스토리에 저장하지 못했습니다.',
+      });
     }
   };
 
@@ -255,6 +301,7 @@ export function WorkspaceSlot({
                     onUpdate(slot.id, {
                       originalImage: null,
                       originalMimeType: null,
+                      originalFileName: null,
                       rawAnalysis: null,
                       trace: null,
                       report: null,
@@ -263,6 +310,9 @@ export function WorkspaceSlot({
                       generatedImage: null,
                       generatedMimeType: null,
                       savedHistoryId: null,
+                      historySaveError: null,
+                      autoSavePath: null,
+                      autoSaveError: null,
                       status: 'idle',
                       error: null,
                     });
@@ -344,7 +394,7 @@ export function WorkspaceSlot({
               {copied === 'prompt' ? '복사됨' : '프롬프트 복사'}
             </button>
             <button className="text-action" disabled={!slot.rawAnalysis || busy} onClick={() => void saveCurrent()}>
-              <Save size={14} /> 저장
+              <Save size={14} /> 히스토리 저장
             </button>
           </div>
 
@@ -371,10 +421,14 @@ export function WorkspaceSlot({
 
       {slot.report && <AnalysisReportView report={slot.report} />}
 
+      {slot.autoSavePath && <div className="auto-save-state"><Check size={15} /> 자동 저장됨: {slot.autoSavePath}</div>}
+      {slot.autoSaveError && <div className="persistence-warning">분석은 완료됐지만 결과 파일 자동 저장 실패: {slot.autoSaveError}</div>}
+      {slot.historySaveError && <div className="persistence-warning">분석 결과는 유지됐지만 히스토리 저장 실패: {slot.historySaveError}</div>}
+
       {busy && (
         <div className="busy-overlay">
           <LoaderCircle className="animate-spin" size={24} />
-          <span>{slot.status === 'analyzing' ? '이미지 분석 중' : slot.status === 'generating' ? '이미지 생성 중' : '히스토리에 저장 중'}</span>
+          <span>{slot.status === 'analyzing' ? '이미지 분석 중' : slot.status === 'generating' ? '이미지 생성 중' : '결과 저장 중'}</span>
         </div>
       )}
       {slot.error && (

@@ -108,11 +108,22 @@ View selectable analysis models, selectable image-generation models, and special
 1. Select a workspace to make it active.
 2. Click the `원본 이미지` area to choose a file, drag an image into it, or paste an image from the clipboard.
 3. Analysis starts automatically when the image is loaded.
-4. When it finishes, the analysis specifications and generation prompts appear and the result is saved to History automatically.
+4. When it finishes, the analysis specifications and generation prompts appear and the result is saved automatically to History and result files.
 
 Use the buttons over the source image to enlarge, download, or remove it. `다시 분석` analyzes the current image again with the current settings.
 
 Clipboard paste targets the active workspace. If none is active, the app prefers an empty workspace.
+
+### Automatic result-file storage
+
+After a successful analysis, files accumulate automatically in the `analysis_results` folder at the project root. The app does not create per-run subfolders or ZIP archives for automatic storage.
+
+- `{common-name}.txt`: one UTF-8 file containing the execution report, full analysis, and the original English and Korean extracted prompts.
+- `{common-name}_ref.original-extension`: the analyzed image's original bytes, saved without re-encoding.
+- Compare mode gives Original Analysis and New Harness separate unique common names.
+- A clipboard image without a filename uses the extension associated with its MIME type.
+- The relative path is displayed after a successful save. A file-save failure does not discard the completed analysis or prompt; its reason is displayed separately.
+- The API key is not included in the automatic-save request or output files.
 
 ## 6. Analysis specifications and prompts
 
@@ -127,7 +138,7 @@ Clipboard paste targets the active workspace. If none is active, the app prefers
 - Use `EN` and `KO` to switch between English and Korean prompts.
 - Edit the prompt before generating an image.
 - Use `프롬프트 복사` to copy the current prompt.
-- Use `저장` to save the current edited state to History.
+- Use `히스토리 저장` to save the current edited state to History.
 
 Switching languages restores the original analysis result for that language in the editor. Select the language first, then make manual edits.
 
@@ -155,7 +166,7 @@ Use the buttons over the generated image to enlarge or download it.
 3. Add an image by clicking, pasting, or dragging it into the source area.
 4. Select `동일 조건 A/B 분석 실행`.
 
-Each side displays its generation prompt, analysis specifications, elapsed time, tokens, estimated cost, and analysis report. Use `EN` or `KO` under `결과 언어` to switch both sides' prompts and analysis specifications together. English is the default. Each successful result is saved to History separately.
+Each side displays its generation prompt, analysis specifications, elapsed time, tokens, estimated cost, and analysis report. Use `EN` or `KO` under `결과 언어` to switch both sides' prompts and analysis specifications together. English is the default. Each successful result is saved separately to History and to `analysis_results` with its own common name.
 
 - If one side fails, use `실패 단계부터 재시도` to rerun only its failed stage and downstream stages. You may select another model first; previously successful stages are not called again.
 - Use `비교 리포트 .md 저장` to save both reports in one Markdown file.
@@ -200,4 +211,5 @@ Each ZIP record can include the source and generated images, prompt, analysis te
 - Original Analysis retries its only analysis stage. The New Harness uses `실패 단계부터 재시도` to keep successful earlier stages and resume at the failed stage.
 - Before a New Harness or Compare retry, you may explicitly choose another model. The new selection applies only to the failed and downstream stages; there is no automatic model fallback.
 - Failed calls remain in the report with their attempt count, duration, model, returned token usage when available, finish reason, and error reason.
+- A result-file or History save failure does not discard a successful analysis; only the persistence failure reason is displayed separately.
 - If the selected model does not support Agentic Vision, disable detailed inspection or choose a supporting model and retry.

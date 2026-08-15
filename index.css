@@ -247,6 +247,8 @@ input::placeholder, textarea::placeholder { color: #70808f; opacity: 1; }
 .compare-empty { display: flex; height: 410px; align-items: center; justify-content: center; color: #91a0ad; font-size: 13px; }
 .compare-save-state { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: #92dfb4; font-size: 13px; }
 .compare-side-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; border: 1px solid rgba(245,110,110,.38); border-radius: 9px; padding: 11px 12px; color: #ffc1c1; background: rgba(74,21,26,.45); font-size: 13px; line-height: 1.55; }
+.auto-save-state { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: #92dfb4; font-size: 13px; overflow-wrap: anywhere; }
+.persistence-warning { margin-top: 10px; border: 1px solid rgba(245,178,80,.35); border-radius: 9px; padding: 9px 11px; color: #ffd39a; background: rgba(72,48,18,.38); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .compare-result .analysis-report { margin: 16px -16px -16px; border-radius: 0 0 14px 14px; }
 .static-error { position: static; margin-bottom: 14px; }
 

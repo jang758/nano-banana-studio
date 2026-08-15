@@ -146,6 +146,7 @@ export default function App({
     updateSlot(target.id, {
       originalImage: item.originalImageBase64 ?? null,
       originalMimeType: item.originalMimeType ?? null,
+      originalFileName: item.originalFile ?? null,
       generatedImage: item.generatedImageBase64 ?? null,
       generatedMimeType: item.generatedMimeType ?? null,
       analysisText: item.analysisText || (item.analysis ? formatAnalysis(item.analysis, item.analysisLang) : ''),
@@ -156,6 +157,9 @@ export default function App({
       trace: item.trace ?? null,
       report: item.report ?? null,
       savedHistoryId: item.id,
+      historySaveError: null,
+      autoSavePath: null,
+      autoSaveError: null,
       status: 'idle',
       error: null,
       resumeState: null,
