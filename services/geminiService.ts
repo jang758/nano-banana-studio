@@ -17,6 +17,7 @@ import {
   HARNESS_CRITIC_INSTRUCTION,
   HARNESS_EVIDENCE_INSTRUCTION,
   HARNESS_SYNTHESIS_INSTRUCTION,
+  SKIN_REDNESS_MODERATION_INSTRUCTION,
   STANDARD_ANALYSIS_REQUEST,
 } from '../constants';
 import type {
@@ -195,7 +196,7 @@ function structuredConfig(
 ): GenerateContentConfig {
   const thinkingConfig = thinkingConfigForModel(model);
   return {
-    systemInstruction,
+    systemInstruction: `${systemInstruction.trimEnd()}\n\n${SKIN_REDNESS_MODERATION_INSTRUCTION}`,
     responseMimeType: 'application/json',
     responseJsonSchema: schema,
     safetySettings: SAFETY_SETTINGS,

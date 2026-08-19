@@ -1,5 +1,6 @@
 import { BlockedReason, FinishReason, GenerateContentResponse, GoogleGenAI } from '@google/genai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SKIN_REDNESS_MODERATION_INSTRUCTION } from '../constants';
 import {
   MAX_API_ATTEMPTS,
   analyzeImage,
@@ -95,6 +96,14 @@ describe('generateContent request contract', () => {
     expect(textRequest.config).not.toHaveProperty('temperature');
     expect(textRequest.config).not.toHaveProperty('topP');
     expect(textRequest.config).not.toHaveProperty('topK');
+  });
+
+  it('applies the narrow skin-redness moderation rule without changing the supplied instruction', () => {
+    const payload = request(false);
+    expect(payload.config?.systemInstruction).toBe(`system\n\n${SKIN_REDNESS_MODERATION_INSTRUCTION}`);
+    expect(payload.config?.systemInstruction).toContain('slightly red');
+    expect(payload.config?.systemInstruction).toContain('아주 약한 홍조');
+    expect(payload.config?.systemInstruction).toContain('clothing, makeup, lighting, or the background');
   });
 
   it('adds code execution without changing the selected model', () => {
@@ -220,6 +229,7 @@ describe('generateContent request contract', () => {
       expect(call.model).toBe('gemini-pro-latest');
       expect(call.config.safetySettings).toHaveLength(4);
       expect(call.config.safetySettings.every((setting: { threshold: string }) => setting.threshold === 'OFF')).toBe(true);
+      expect(call.config.systemInstruction).toContain(SKIN_REDNESS_MODERATION_INSTRUCTION);
     }
     expect(generate.mock.calls[0]?.[0].config.tools).toEqual([{ codeExecution: {} }]);
     expect(generate.mock.calls[1]?.[0].config.tools).toBeUndefined();

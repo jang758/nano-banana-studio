@@ -91,6 +91,8 @@ If model discovery fails, the built-in list and existing Custom entries remain a
 
 Allows Agentic Vision. When enabled, the model may run zoom, coordinate, or pixel inspections when needed. The selected analysis model does not change. Check the analysis report to see whether it was actually used and how many inspections ran.
 
+When visible skin appears red or flushed, analysis and generated prompts describe it only as `slightly red` or `slightly flushed` without intensifying it. This limit does not apply to red clothing, makeup, lighting, or backgrounds.
+
 ### Image-generation model
 
 Select the model used to generate an image from the extracted prompt.
